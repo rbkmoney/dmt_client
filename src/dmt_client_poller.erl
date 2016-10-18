@@ -91,6 +91,18 @@ pull_safe() ->
         NewLastVersion = pull(),
         {ok, NewLastVersion}
     catch
-        Class:Error  ->
-            {error, {Class, Error}}
+        error:{transport_error, Reason} when
+            % denial of service
+            Reason == server_error;
+            Reason == service_unavailable;
+            Reason == econnrefused;
+            % undefined result
+            Reason == timeout;
+            Reason == closed; % only if received after successful tcp send, otherwise denial of service
+            Reason == partial_response
+        ->
+            {error, Reason};
+        % undefined result
+        error:{transport_error, {http_code, 504}} ->
+            {error, gateway_timeout}
     end.
