@@ -19,7 +19,7 @@
 start_link() ->
     gen_server:start_link({local, ?SERVER}, ?MODULE, [], []).
 
--spec poll() -> ok.
+-spec poll() -> ok | {error, term()}.
 poll() ->
     gen_server:call(?SERVER, poll).
 
@@ -37,8 +37,12 @@ init(_) ->
 
 -spec handle_call(poll, {pid(), term()}, state()) -> {reply, term(), state()}.
 handle_call(poll, _From, #state{last_version = LastVersion} = State) ->
-    NewLastVersion = pull(LastVersion),
-    {reply, ok, restart_timer(State#state{last_version = NewLastVersion})}.
+    case pull_safe(LastVersion) of
+        {ok, NewLastVersion} ->
+            {reply, ok, restart_timer(State#state{last_version = NewLastVersion})};
+        {error, _} = Error->
+            {reply, Error, restart_timer(State)}
+    end.
 
 -spec handle_cast(term(), state()) -> {noreply, state()}.
 handle_cast(_Msg, State) ->
@@ -46,8 +50,12 @@ handle_cast(_Msg, State) ->
 
 -spec handle_info(poll, state()) -> {noreply, state()}.
 handle_info(poll, #state{last_version = LastVersion} = State) ->
-    NewLastVersion = pull(LastVersion),
-    {noreply, restart_timer(State#state{last_version = NewLastVersion})}.
+    case pull_safe(LastVersion) of
+        {ok, NewLastVersion} ->
+            {noreply, restart_timer(State#state{last_version = NewLastVersion})};
+        {error, _Error} ->
+            {noreply, restart_timer(State)}
+    end.
 
 -spec terminate(term(), state()) -> ok.
 terminate(_Reason, _State) ->
@@ -84,3 +92,14 @@ pull(LastVersion) ->
     #'Snapshot'{version = NewLastVersion} = NewHead = dmt_history:head(FreshHistory, OldHead),
     _ = dmt_cache:cache_snapshot(NewHead),
     NewLastVersion.
+
+-spec pull_safe(dmt:version()) -> {ok, dmt:version()} | {error, term()}.
+
+pull_safe(LastVersion) ->
+    try
+        NewLastVersion = pull(LastVersion),
+        {ok, NewLastVersion}
+    catch
+        Class:Error  ->
+            {error, {Class, Error}}
+    end.
