@@ -19,13 +19,12 @@
 start_link() ->
     gen_server:start_link({local, ?SERVER}, ?MODULE, [], []).
 
--spec poll() -> ok | {error, term()}.
+-spec poll() -> {ok, dmt:version()} | {error, term()}.
 poll() ->
     gen_server:call(?SERVER, poll).
 
 -record(state, {
-    timer :: reference(),
-    last_version = undefined :: dmt:version() | undefined
+    timer :: reference()
 }).
 
 -type state() :: #state{}.
@@ -36,26 +35,17 @@ init(_) ->
     {ok, start_timer(#state{})}.
 
 -spec handle_call(poll, {pid(), term()}, state()) -> {reply, term(), state()}.
-handle_call(poll, _From, #state{last_version = LastVersion} = State) ->
-    case pull_safe(LastVersion) of
-        {ok, NewLastVersion} ->
-            {reply, ok, restart_timer(State#state{last_version = NewLastVersion})};
-        {error, _} = Error->
-            {reply, Error, restart_timer(State)}
-    end.
+handle_call(poll, _From, State) ->
+    {reply, pull_safe(), restart_timer(State)}.
 
 -spec handle_cast(term(), state()) -> {noreply, state()}.
 handle_cast(_Msg, State) ->
     {noreply, State}.
 
 -spec handle_info(poll, state()) -> {noreply, state()}.
-handle_info(poll, #state{last_version = LastVersion} = State) ->
-    case pull_safe(LastVersion) of
-        {ok, NewLastVersion} ->
-            {noreply, restart_timer(State#state{last_version = NewLastVersion})};
-        {error, _Error} ->
-            {noreply, restart_timer(State)}
-    end.
+handle_info(poll, State) ->
+    _Result = pull_safe(),
+    {noreply, restart_timer(State)}.
 
 -spec terminate(term(), state()) -> ok.
 terminate(_Reason, _State) ->
@@ -67,7 +57,7 @@ code_change(_OldVsn, _State, _Extra) ->
 
 %% Internal
 
--define(INTERVAL, 5000).
+-define(DEFAULT_INTERVAL, 5000).
 
 -spec restart_timer(#state{}) -> #state{}.
 restart_timer(State = #state{timer = undefined}) ->
@@ -78,26 +68,27 @@ restart_timer(State = #state{timer = TimerRef}) ->
 
 -spec start_timer(#state{}) -> #state{}.
 start_timer(State = #state{timer = undefined}) ->
-    State#state{timer = erlang:send_after(?INTERVAL, self(), poll)}.
+    Interval = genlib_app:env(dmt_client, poll_interval, ?DEFAULT_INTERVAL),
+    State#state{timer = erlang:send_after(Interval, self(), poll)}.
 
--spec pull(dmt:version()) -> dmt:version().
-pull(LastVersion) ->
-    FreshHistory = dmt_client_api:pull(LastVersion),
+-spec pull() -> dmt:version().
+pull() ->
     OldHead = try 
         dmt_cache:checkout_head()
     catch
         version_not_found ->
             #'Snapshot'{version = 0, domain = dmt_domain:new()}
     end,
+    FreshHistory = dmt_client_api:pull(OldHead#'Snapshot'.version),
     #'Snapshot'{version = NewLastVersion} = NewHead = dmt_history:head(FreshHistory, OldHead),
     _ = dmt_cache:cache_snapshot(NewHead),
     NewLastVersion.
 
--spec pull_safe(dmt:version()) -> {ok, dmt:version()} | {error, term()}.
+-spec pull_safe() -> {ok, dmt:version()} | {error, term()}.
 
-pull_safe(LastVersion) ->
+pull_safe() ->
     try
-        NewLastVersion = pull(LastVersion),
+        NewLastVersion = pull(),
         {ok, NewLastVersion}
     catch
         Class:Error  ->
