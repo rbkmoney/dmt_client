@@ -25,7 +25,7 @@ poll() ->
 
 -record(state, {
     timer :: reference(),
-    last_version = undefined :: dmt:version()
+    last_version = undefined :: dmt:version() | undefined
 }).
 
 -type state() :: #state{}.
