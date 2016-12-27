@@ -7,7 +7,7 @@
 -spec handle_event(EventType, RpcID, EventMeta, Opts)
     -> _ when
         EventType :: woody_event_handler:event(),
-        RpcID ::  woody_t:rpc_id(),
+        RpcID ::  woody:rpc_id(),
         EventMeta :: woody_event_handler:event_meta(),
         Opts :: woody:options().
 
