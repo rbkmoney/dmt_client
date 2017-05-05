@@ -5,20 +5,29 @@
 -export([pull/1]).
 -export([checkout_object/2]).
 
+-type ref() :: dmsl_domain_config_thrift:'Reference'().
+-type version() :: dmsl_domain_config_thrift:'Version'().
+-type snapshot() :: dmsl_domain_config_thrift:'Snapshot'().
+-type commit() :: dmsl_domain_config_thrift:'Commit'().
+-type object_ref() :: dmsl_domain_thrift:'Reference'().
 
--spec commit(dmt:version(), dmt:commit()) -> dmt:version().
+-spec commit(version(), commit()) -> version().
+
 commit(Version, Commit) ->
     call(repository, 'Commit', [Version, Commit]).
 
--spec checkout(dmt:ref()) -> dmt:snapshot().
+-spec checkout(ref()) -> snapshot().
+
 checkout(Reference) ->
     call(repository, 'Checkout', [Reference]).
 
--spec pull(dmt:version()) -> dmt:history().
+-spec pull(version()) -> dmsl_domain_config_thrift:'History'().
+
 pull(Version) ->
     call(repository, 'Pull', [Version]).
 
--spec checkout_object(dmt:ref(), dmt:object_ref()) -> dmt:domain_object().
+-spec checkout_object(ref(), object_ref()) -> dmsl_domain_thrift:'DomainObject'().
+
 checkout_object(Reference, ObjectReference) ->
     call(repository_client, 'checkoutObject', [Reference, ObjectReference]).
 
@@ -29,9 +38,9 @@ call(ServiceName, Function, Args) ->
     {Path, Service} = get_handler_spec(ServiceName),
     Call = {Service, Function, Args},
     Opts = #{
-        url => Host ++ ":" ++ Port ++ Path,
+        url => list_to_binary(Host ++ ":" ++ Port ++ Path),
         event_handler => {dmt_client_woody_event_handler, undefined}
-    }, 
+    },
     Context = woody_context:new(),
     case woody_client:call(Call, Opts, Context) of
         {ok, Response} ->

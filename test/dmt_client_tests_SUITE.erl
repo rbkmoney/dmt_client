@@ -52,8 +52,8 @@ poll(_C) ->
     #'Snapshot'{version = Version1} = dmt_client:checkout({head, #'Head'{}}),
     Version2 = dmt_client_api:commit(Version1, #'Commit'{ops = [{insert, #'InsertOp'{object = Object}}]}),
     true = Version1 < Version2,
-    %% TODO: replace with sleep(genlib_app:env(dmt_client, poll_interval))
-    {ok, _} = dmt_client_poller:poll(),
+    % wait for cache update
+    _ = timer:sleep(genlib_app:env(dmt_client, poll_interval, 5000)),
     #'Snapshot'{version = Version2} = dmt_client:checkout({head, #'Head'{}}),
     #'VersionedObject'{object = Object} = dmt_client:checkout_object({head, #'Head'{}}, Ref).
 
