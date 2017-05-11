@@ -8,6 +8,7 @@
 -export([put/1]).
 -export([get/1]).
 -export([get_latest/0]).
+-export([update/0]).
 
 %%
 
@@ -48,6 +49,11 @@ get(Version) ->
 get_latest() ->
     latest_snapshot().
 
+-spec update() -> {ok, dmt_client:version()} | {error, term()}.
+
+update() ->
+    gen_server:call(?SERVER, update).
+
 %%
 
 -record(state, {
@@ -73,6 +79,9 @@ init(_) ->
 
 handle_call({put, Snapshot}, _From, State) ->
     {reply, put_snapshot(Snapshot), State};
+
+handle_call(update, _From, State) ->
+    {reply, update_cache(), restart_timer(State)};
 
 handle_call(_Msg, _From, State) ->
     {noreply, State}.

@@ -8,26 +8,27 @@
 -spec commit(dmt_client:version(), dmt_client:commit()) -> dmt_client:version() | no_return().
 
 commit(Version, Commit) ->
-    call(repository, 'Commit', [Version, Commit]).
+    call('Repository', 'Commit', [Version, Commit]).
 
 -spec checkout(dmt_client:ref()) -> dmt_client:snapshot() | no_return().
 
 checkout(Reference) ->
-    call(repository, 'Checkout', [Reference]).
+    call('Repository', 'Checkout', [Reference]).
 
 -spec pull(dmt_client:version()) -> dmt_client:history() | no_return().
 
 pull(Version) ->
-    call(repository, 'Pull', [Version]).
+    call('Repository', 'Pull', [Version]).
 
 -spec checkout_object(dmt_client:ref(), dmt_client:object_ref()) -> dmsl_domain_thrift:'DomainObject'() | no_return().
 
 checkout_object(Reference, ObjectReference) ->
-    call(repository_client, 'checkoutObject', [Reference, ObjectReference]).
+    call('RepositoryClient', 'checkoutObject', [Reference, ObjectReference]).
 
 
 call(ServiceName, Function, Args) ->
-    {Url, Service} = get_handler_spec(ServiceName),
+    Url = get_service_url(ServiceName),
+    Service = get_service_modname(ServiceName),
     Call = {Service, Function, Args},
     Opts = #{
         url => Url,
@@ -41,13 +42,13 @@ call(ServiceName, Function, Args) ->
             throw(Exception)
     end.
 
-get_handler_spec(repository) ->
-    {
-        application:get_env(dmt_client, repository_url, <<"dominant:8022/v1/domain/repository">>),
-        {dmsl_domain_config_thrift, 'Repository'}
-    };
-get_handler_spec(repository_client) ->
-    {
-        application:get_env(dmt_client, repository_client_url, <<"dominant:8022/v1/domain/repository_client">>),
-        {dmsl_domain_config_thrift, 'RepositoryClient'}
-    }.
+get_service_url(ServiceName) ->
+    maps:get(ServiceName, genlib_app:env(dmt_client, service_urls)).
+
+get_service_modname(ServiceName) ->
+    {get_service_module(ServiceName), ServiceName}.
+
+get_service_module('Repository') ->
+    dmsl_domain_config_thrift;
+get_service_module('RepositoryClient') ->
+    dmsl_domain_config_thrift.
