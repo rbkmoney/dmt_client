@@ -17,6 +17,13 @@
 -export([start/2]).
 -export([stop/1]).
 
+-export_type([ref/0]).
+-export_type([version/0]).
+-export_type([snapshot/0]).
+-export_type([commit/0]).
+-export_type([object_ref/0]).
+-export_type([history/0]).
+
 -include_lib("dmsl/include/dmsl_domain_config_thrift.hrl").
 
 -type ref() :: dmsl_domain_config_thrift:'Reference'().
@@ -24,6 +31,7 @@
 -type snapshot() :: dmsl_domain_config_thrift:'Snapshot'().
 -type commit() :: dmsl_domain_config_thrift:'Commit'().
 -type object_ref() :: dmsl_domain_thrift:'Reference'().
+-type history() :: dmsl_domain_config_thrift:'History'().
 
 %% API
 
@@ -32,7 +40,7 @@
 checkout(Reference) ->
     CacheResult = case Reference of
         {head, #'Head'{}} ->
-            dmt_client_cache:get_max();
+            dmt_client_cache:get_latest();
         {version, Version} ->
             dmt_client_cache:get(Version)
     end,
@@ -57,7 +65,6 @@ checkout_object(Reference, ObjectReference) ->
 -spec commit(version(), commit()) -> version().
 
 commit(Version, Commit) ->
-    % FIXME WTF?! GO TO CACHE YOU NEWBORN!
     dmt_client_api:commit(Version, Commit).
 
 %% Supervisor callbacks

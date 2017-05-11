@@ -7,9 +7,7 @@
 
 -export([put/1]).
 -export([get/1]).
--export([get_closest/1]).
--export([get_min/0]).
--export([get_max/0]).
+-export([get_latest/0]).
 
 %%
 
@@ -29,39 +27,26 @@
 
 %%
 
--type version() :: dmsl_domain_config_thrift:'Version'().
--type snapshot() :: dmsl_domain_config_thrift:'Snapshot'().
-
 -spec start_link() -> {ok, pid()} | {error, term()}. % FIXME
 
 start_link() ->
     gen_server:start_link({local, ?SERVER}, ?MODULE, [], []).
 
--spec put(snapshot()) -> snapshot().
+-spec put(dmt_client:snapshot()) -> dmt_client:snapshot().
 
 put(Snapshot) ->
     ok = gen_server:call(?SERVER, {put, Snapshot}),
     Snapshot.
 
--spec get(version()) -> {ok, snapshot()} | {error, version_not_found}.
+-spec get(dmt_client:version()) -> {ok, dmt_client:snapshot()} | {error, version_not_found}.
 
 get(Version) ->
-    gen_server:call(?SERVER, {get, Version}).
+    get_snapshot(Version).
 
--spec get_closest(version()) -> {ok, snapshot()} | {error, version_not_found}.
+-spec get_latest() -> {ok, dmt_client:snapshot()} | {error, version_not_found}.
 
-get_closest(Version) ->
-    gen_server:call(?SERVER, {get_closest, Version}).
-
--spec get_min() -> {ok, snapshot()} | {error, version_not_found}.
-
-get_min() ->
-    gen_server:call(?SERVER, get_min).
-
--spec get_max() -> {ok, snapshot()} | {error, version_not_found}.
-
-get_max() ->
-    gen_server:call(?SERVER, get_max).
+get_latest() ->
+    latest_snapshot().
 
 %%
 
@@ -88,18 +73,6 @@ init(_) ->
 
 handle_call({put, Snapshot}, _From, State) ->
     {reply, put_snapshot(Snapshot), State};
-
-handle_call({get, Version}, _From, State) ->
-    {reply, get_snapshot(Version), State};
-
-handle_call({get_closest, Version}, _From, State) ->
-    {reply, closest_snapshot(Version), State};
-
-handle_call(get_min, _From, State) ->
-    {reply, min_snapshot(), State};
-
-handle_call(get_max, _From, State) ->
-    {reply, max_snapshot(), State};
 
 handle_call(_Msg, _From, State) ->
     {noreply, State}.
@@ -128,13 +101,13 @@ code_change(_OldVsn, _State, _Extra) ->
 
 %% internal
 
--spec put_snapshot(snapshot()) -> ok.
+-spec put_snapshot(dmt_client:snapshot()) -> ok.
 
 put_snapshot(Snapshot) ->
     true = ets:insert(?TABLE, Snapshot),
     ok.
 
--spec get_snapshot(version()) -> {ok, snapshot()} | {error, version_not_found}.
+-spec get_snapshot(dmt_client:version()) -> {ok, dmt_client:snapshot()} | {error, version_not_found}.
 
 get_snapshot(Version) ->
     case ets:lookup(?TABLE, Version) of
@@ -144,43 +117,14 @@ get_snapshot(Version) ->
             {error, version_not_found}
     end.
 
--spec min_snapshot() -> {ok, snapshot()} | {error, version_not_found}.
+-spec latest_snapshot() -> {ok, dmt_client:snapshot()} | {error, version_not_found}.
 
-min_snapshot() ->
-    case ets:first(?TABLE) of
-        '$end_of_table' ->
-            {error, version_not_found};
-        Version ->
-            get_snapshot(Version)
-    end.
-
--spec max_snapshot() -> {ok, snapshot()} | {error, version_not_found}.
-
-max_snapshot() ->
+latest_snapshot() ->
     case ets:last(?TABLE) of
         '$end_of_table' ->
             {error, version_not_found};
         Version ->
             get_snapshot(Version)
-    end.
-
--spec closest_snapshot(version()) -> {ok, snapshot()} | {error, version_not_found}.
-
-closest_snapshot(Version) ->
-    CachedVersions = ets:select(?TABLE, ets:fun2ms(fun (#'Snapshot'{version = V}) -> V end)),
-    Closest = lists:foldl(fun (V, Acc) ->
-        case abs(V - Version) =< abs(Acc - Version) of
-            true ->
-                V;
-            false ->
-                Acc
-        end
-    end, 0, CachedVersions),
-    case Closest of
-        0 ->
-            {error, version_not_found};
-        Closest ->
-            get_snapshot(Closest)
     end.
 
 -spec restart_timer(state()) -> state().
@@ -195,21 +139,20 @@ restart_timer(State = #state{timer = TimerRef}) ->
 -spec start_timer(state()) -> state().
 
 start_timer(State = #state{timer = undefined}) ->
-    Interval = genlib_app:env(dmt_client, poll_interval, ?DEFAULT_INTERVAL),
+    Interval = genlib_app:env(dmt_client, cache_update_interval, ?DEFAULT_INTERVAL),
     State#state{timer = erlang:send_after(Interval, self(), timeout)}.
 
--spec update_cache() -> {ok, version()} | {error, term()}.
+-spec update_cache() -> {ok, dmt_client:version()} | {error, term()}.
 
 update_cache() ->
-    OldHead = case max_snapshot() of
-        {error, version_not_found} ->
-            #'Snapshot'{version = 0, domain = dmt_domain:new()};
-        {ok, Snapshot} ->
-            Snapshot
-    end,
     try
-        FreshHistory = dmt_client_api:pull(OldHead#'Snapshot'.version),
-        NewHead = dmt_history:head(FreshHistory, OldHead),
+        NewHead = case latest_snapshot() of
+            {error, version_not_found} ->
+                dmt_client_api:checkout({head, #'Head'{}});
+            {ok, OldHead} ->
+                FreshHistory = dmt_client_api:pull(OldHead#'Snapshot'.version),
+                dmt_history:head(FreshHistory, OldHead)
+        end,
         ok = put_snapshot(NewHead),
         {ok, NewHead#'Snapshot'.version}
     catch
