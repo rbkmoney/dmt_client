@@ -35,7 +35,7 @@
 
 %% API
 
--spec checkout(ref()) -> snapshot().
+-spec checkout(ref()) -> snapshot() | no_return().
 
 checkout(Reference) ->
     CacheResult = case Reference of
@@ -62,7 +62,7 @@ checkout_object(Reference, ObjectReference) ->
             throw(object_not_found)
     end.
 
--spec commit(version(), commit()) -> version().
+-spec commit(version(), commit()) -> version() | no_return().
 
 commit(Version, Commit) ->
     dmt_client_api:commit(Version, Commit).
