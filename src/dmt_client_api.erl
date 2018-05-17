@@ -33,7 +33,7 @@ call(ServiceName, Function, Args) ->
     Opts = #{
         url => Url,
         event_handler => scoper_woody_event_handler,
-        transport_opts => [{recv_timeout, 60000}, {connect_timeout, 1000}]
+        transport_opts => get_transport_opts()
     },
     Context = woody_context:new(),
     case woody_client:call(Call, Opts, Context) of
@@ -53,3 +53,7 @@ get_service_module('Repository') ->
     dmsl_domain_config_thrift;
 get_service_module('RepositoryClient') ->
     dmsl_domain_config_thrift.
+
+get_transport_opts() ->
+    Default = [{recv_timeout, 60000}, {connect_timeout, 1000}],
+    genlib_app:env(dmt_client, transport_opts, Default).
