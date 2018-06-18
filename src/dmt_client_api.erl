@@ -1,39 +1,45 @@
 -module(dmt_client_api).
 
--export([commit/2]).
--export([checkout/1]).
--export([pull/1]).
--export([checkout_object/2]).
+-export([commit/3]).
+-export([checkout/2]).
+-export([pull/2]).
+-export([checkout_object/3]).
 
--spec commit(dmt_client:version(), dmt_client:commit()) -> dmt_client:version() | no_return().
+-type transport_opts() :: woody_client_thrift_http_transport:options() | undefined.
 
-commit(Version, Commit) ->
-    call('Repository', 'Commit', [Version, Commit]).
+-spec commit(dmt_client:version(), dmt_client:commit(), transport_opts()) ->
+    dmt_client:version() | no_return().
 
--spec checkout(dmt_client:ref()) -> dmt_client:snapshot() | no_return().
+commit(Version, Commit, Opts) ->
+    call('Repository', 'Commit', [Version, Commit], Opts).
 
-checkout(Reference) ->
-    call('Repository', 'Checkout', [Reference]).
+-spec checkout(dmt_client:ref(), transport_opts()) ->
+    dmt_client:snapshot() | no_return().
 
--spec pull(dmt_client:version()) -> dmt_client:history() | no_return().
+checkout(Reference, Opts) ->
+    call('Repository', 'Checkout', [Reference], Opts).
 
-pull(Version) ->
-    call('Repository', 'Pull', [Version]).
+-spec pull(dmt_client:version(), transport_opts()) ->
+    dmt_client:history() | no_return().
 
--spec checkout_object(dmt_client:ref(), dmt_client:object_ref()) -> dmsl_domain_thrift:'DomainObject'() | no_return().
+pull(Version, Opts) ->
+    call('Repository', 'Pull', [Version], Opts).
 
-checkout_object(Reference, ObjectReference) ->
-    call('RepositoryClient', 'checkoutObject', [Reference, ObjectReference]).
+-spec checkout_object(dmt_client:ref(), dmt_client:object_ref(), transport_opts()) ->
+    dmsl_domain_thrift:'DomainObject'() | no_return().
+
+checkout_object(Reference, ObjectReference, Opts) ->
+    call('RepositoryClient', 'checkoutObject', [Reference, ObjectReference], Opts).
 
 
-call(ServiceName, Function, Args) ->
+call(ServiceName, Function, Args, TransportOpts) ->
     Url = get_service_url(ServiceName),
     Service = get_service_modname(ServiceName),
     Call = {Service, Function, Args},
     Opts = #{
         url => Url,
         event_handler => scoper_woody_event_handler,
-        transport_opts => get_transport_opts()
+        transport_opts => ensure_transport_opts(TransportOpts)
     },
     Context = woody_context:new(),
     case woody_client:call(Call, Opts, Context) of
@@ -54,6 +60,11 @@ get_service_module('Repository') ->
 get_service_module('RepositoryClient') ->
     dmsl_domain_config_thrift.
 
-get_transport_opts() ->
+-spec ensure_transport_opts(transport_opts()) ->
+    woody_client_thrift_http_transport:options().
+
+ensure_transport_opts(Opts) when is_list(Opts) ->
+    Opts;
+ensure_transport_opts(undefined) ->
     Default = [{recv_timeout, 60000}, {connect_timeout, 1000}],
     genlib_app:env(dmt_client, transport_opts, Default).
