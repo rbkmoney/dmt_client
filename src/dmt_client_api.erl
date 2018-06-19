@@ -5,27 +5,25 @@
 -export([pull/2]).
 -export([checkout_object/3]).
 
--type transport_opts() :: woody_client_thrift_http_transport:options() | undefined.
-
--spec commit(dmt_client:version(), dmt_client:commit(), transport_opts()) ->
+-spec commit(dmt_client:version(), dmt_client:commit(), dmt_client:transport_opts()) ->
     dmt_client:version() | no_return().
 
 commit(Version, Commit, Opts) ->
     call('Repository', 'Commit', [Version, Commit], Opts).
 
--spec checkout(dmt_client:ref(), transport_opts()) ->
+-spec checkout(dmt_client:ref(), dmt_client:transport_opts()) ->
     dmt_client:snapshot() | no_return().
 
 checkout(Reference, Opts) ->
     call('Repository', 'Checkout', [Reference], Opts).
 
--spec pull(dmt_client:version(), transport_opts()) ->
+-spec pull(dmt_client:version(), dmt_client:transport_opts()) ->
     dmt_client:history() | no_return().
 
 pull(Version, Opts) ->
     call('Repository', 'Pull', [Version], Opts).
 
--spec checkout_object(dmt_client:ref(), dmt_client:object_ref(), transport_opts()) ->
+-spec checkout_object(dmt_client:ref(), dmt_client:object_ref(), dmt_client:transport_opts()) ->
     dmsl_domain_thrift:'DomainObject'() | no_return().
 
 checkout_object(Reference, ObjectReference, Opts) ->
@@ -60,7 +58,7 @@ get_service_module('Repository') ->
 get_service_module('RepositoryClient') ->
     dmsl_domain_config_thrift.
 
--spec ensure_transport_opts(transport_opts()) ->
+-spec ensure_transport_opts(dmt_client:transport_opts()) ->
     woody_client_thrift_http_transport:options().
 
 ensure_transport_opts(Opts) when is_list(Opts) ->

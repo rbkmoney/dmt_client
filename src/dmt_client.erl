@@ -28,6 +28,7 @@
 -export_type([commit/0]).
 -export_type([object_ref/0]).
 -export_type([history/0]).
+-export_type([transport_opts/0]).
 
 -include_lib("dmsl/include/dmsl_domain_config_thrift.hrl").
 
