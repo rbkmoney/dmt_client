@@ -167,7 +167,8 @@ update_cache() ->
     try
         NewHead = case latest_snapshot() of
             {ok, OldHead} ->
-                FreshHistory = dmt_client_api:pull_range(OldHead#'Snapshot'.version, ?DEFAULT_LIMIT, undefined),
+                Limit = genlib_app:env(dmt_client, cache_update_pull_limit, ?DEFAULT_LIMIT),
+                FreshHistory = dmt_client_api:pull_range(OldHead#'Snapshot'.version, Limit, undefined),
                 {ok, Head} = dmt_history:head(FreshHistory, OldHead),
                 Head;
             {error, version_not_found} ->
