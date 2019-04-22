@@ -313,13 +313,25 @@ get_object_internal(Version, ObjectRef, Opts) ->
         {ok, _Object} = Result ->
             Result;
         {error, version_not_found} ->
-            ok = put_snapshot(dmt_client_api:checkout({version, Version}, Opts)),
-            do_get_object(Version, ObjectRef);
+            Snapshot = dmt_client_api:checkout({version, Version}, Opts),
+            ok = put_snapshot(Snapshot),
+            get_object_from_domain(ObjectRef, Snapshot);
         {error, object_not_found} = NotFound ->
             NotFound
     catch
         error:{woody_error, {_Source, _Class, _Details}} = Error ->
             {error, Error}
+    end.
+
+-spec get_object_from_domain(dmt_client:object_ref(), dmt_client:snapshot()) ->
+    {ok, dmt_client:domain_object()} | {error, object_not_found}.
+
+get_object_from_domain(ObjectRef, #'Snapshot'{domain = Domain}) ->
+    case dmt_domain:get_object(ObjectRef, Domain) of
+        {ok, _Object} = Result ->
+            Result;
+        error ->
+            {error, object_not_found}
     end.
 
 -spec get_snapshot_internal(dmt_client:version(), dmt_client:transport_opts()) ->
