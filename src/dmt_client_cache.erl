@@ -70,13 +70,13 @@ start_link() ->
     gen_server:start_link({local, ?SERVER}, ?MODULE, [], []).
 
 -spec get(dmt_client:version()) ->
-    {ok, dmt_client:snapshot()} | {error, woody_error()}.
+    {ok, dmt_client:snapshot()} | {error, version_not_found | woody_error()}.
 
 get(Version) ->
     get(Version, undefined).
 
 -spec get(dmt_client:version(), dmt_client:transport_opts()) ->
-    {ok, dmt_client:snapshot()} | {error, woody_error()}.
+    {ok, dmt_client:snapshot()} | {error, version_not_found | woody_error()}.
 
 get(Version, Opts) ->
     case get_snapshot(Version) of
@@ -87,13 +87,13 @@ get(Version, Opts) ->
     end.
 
 -spec get_object(dmt_client:version(), dmt_client:object_ref()) ->
-    {ok, dmt_client:domain_object()} | {error, object_not_found | woody_error()}.
+    {ok, dmt_client:domain_object()} | {error, version_not_found | object_not_found | woody_error()}.
 
 get_object(Version, ObjectRef) ->
     get_object(Version, ObjectRef, undefined).
 
 -spec get_object(dmt_client:version(), dmt_client:object_ref(), dmt_client:transport_opts()) ->
-    {ok, dmt_client:domain_object()} | {error, object_not_found | woody_error()}.
+    {ok, dmt_client:domain_object()} | {error, version_not_found | object_not_found | woody_error()}.
 
 get_object(Version, ObjectRef, Opts) ->
     case do_get_object(Version, ObjectRef) of
@@ -113,8 +113,12 @@ get_last_version() ->
         {ok, Version} ->
             Version;
         {error, version_not_found} ->
-            {ok, Version} = update(),
-            Version
+            case update() of
+                {ok, Version} ->
+                    Version;
+                {error, Error} ->
+                    erlang:error(Error)
+            end
     end.
 
 -spec update() ->
@@ -149,7 +153,8 @@ handle_call(update, _From, State) ->
     {reply, update_cache(), restart_timer(State)};
 
 handle_call({get_snapshot, Version, Opts}, _From, State) ->
-    {reply, get_snapshot_internal(Version, Opts), State};
+    Result = get_snapshot_internal(Version, Opts),
+    {reply, Result, State};
 
 handle_call(_Msg, _From, State) ->
     {noreply, State}.
@@ -275,16 +280,20 @@ get_object_by_snap(#snap{tid = TID}, ObjectRef) ->
     {ok, dmt_client:domain_object()} | {error, version_not_found | object_not_found | woody_error()}.
 
 get_object_internal(Version, ObjectRef, Opts) ->
-    try do_get_object(Version, ObjectRef) of
-        {ok, _Object} = Result ->
-            Result;
-        {error, version_not_found} ->
-            Snapshot = dmt_client_api:checkout({version, Version}, Opts),
-            ok = put_snapshot(Snapshot),
-            get_object_from_snapshot(ObjectRef, Snapshot);
-        {error, object_not_found} = NotFound ->
-            NotFound
+    try
+        case do_get_object(Version, ObjectRef) of
+            {ok, _Object} = Result ->
+                Result;
+            {error, version_not_found} ->
+                Snapshot = dmt_client_api:checkout({version, Version}, Opts),
+                ok = put_snapshot(Snapshot),
+                get_object_from_snapshot(ObjectRef, Snapshot);
+            {error, object_not_found} = NotFound ->
+                NotFound
+        end
     catch
+        throw:#'VersionNotFound'{} ->
+            {error, version_not_found};
         error:{woody_error, {_Source, _Class, _Details}} = Error ->
             {error, Error}
     end.
@@ -301,17 +310,21 @@ get_object_from_snapshot(ObjectRef, #'Snapshot'{domain = Domain}) ->
     end.
 
 -spec get_snapshot_internal(dmt_client:version(), dmt_client:transport_opts()) ->
-    {ok, dmt_client:domain_object()} | {error, woody_error()}.
+    {ok, dmt_client:domain_object()} | {error, version_not_found | woody_error()}.
 
 get_snapshot_internal(Version, Opts) ->
-    try get_snapshot(Version) of
-        {ok, _Snapshot} = Result ->
-            Result;
-        {error, version_not_found} ->
-            Snapshot = dmt_client_api:checkout({version, Version}, Opts),
-            ok = put_snapshot(Snapshot),
-            {ok, Snapshot}
+    try
+        case get_snapshot(Version) of
+            {ok, _Snapshot} = Result ->
+                Result;
+            {error, version_not_found} ->
+                Snapshot = dmt_client_api:checkout({version, Version}, Opts),
+                ok = put_snapshot(Snapshot),
+                {ok, Snapshot}
+        end
     catch
+        throw:#'VersionNotFound'{} ->
+            {error, version_not_found};
         error:{woody_error, {_Source, _Class, _Details}} = Error ->
             {error, Error}
     end.

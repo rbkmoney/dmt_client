@@ -60,8 +60,12 @@ checkout(Reference) ->
 
 checkout(Reference, Opts) ->
     Version = ref_to_version(Reference),
-    {ok, Snapshot} = dmt_client_cache:get(Version, Opts),
-    Snapshot.
+    case dmt_client_cache:get(Version, Opts) of
+        {ok, Snapshot} ->
+            Snapshot;
+        {error, Error} ->
+            erlang:error(Error)
+    end.
 
 -spec checkout_object(ref(), object_ref()) ->
     dmsl_domain_config_thrift:'VersionedObject'() | no_return().
@@ -77,8 +81,10 @@ checkout_object(Reference, ObjectReference, Opts) ->
     case dmt_client_cache:get_object(Version, ObjectReference, Opts) of
         {ok, Object} ->
             #'VersionedObject'{version = Version, object = Object};
+        {error, {woody_error, _} = Error} ->
+            erlang:error(Error);
         {error, _} ->
-            throw(#'ObjectNotFound'{})
+            erlang:throw(#'ObjectNotFound'{})
     end.
 
 -spec commit(version(), commit()) ->
