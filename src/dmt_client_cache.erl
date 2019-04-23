@@ -238,13 +238,17 @@ call(Msg, Timeout) ->
 -spec put_snapshot(dmt_client:snapshot()) ->
     ok.
 
-put_snapshot(Snapshot) ->
-    #'Snapshot'{version = Version, domain = Domain} = Snapshot,
-    TID  = ets:new(?MODULE, ?snapshot_table_opts),
-    true = put_domain_to_table(TID, Domain),
-    Snap = #snap{vsn = Version, tid = TID},
-    true = ets:insert(?TABLE, Snap),
-    cleanup().
+put_snapshot(#'Snapshot'{version = Version, domain = Domain}) ->
+    case get_snap(Version) of
+        {ok, _Snap} ->
+            ok;
+        {error, version_not_found} ->
+            TID  = ets:new(?MODULE, ?snapshot_table_opts),
+            true = put_domain_to_table(TID, Domain),
+            Snap = #snap{vsn = Version, tid = TID},
+            true = ets:insert(?TABLE, Snap),
+            cleanup()
+    end.
 
 -spec put_domain_to_table(ets:tid(), dmt_client:domain()) ->
     true.
