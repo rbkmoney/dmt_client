@@ -47,7 +47,7 @@
 -type history() :: dmsl_domain_config_thrift:'History'().
 -type transport_opts() :: woody_client_thrift_http_transport:options() | undefined.
 
-%% API
+%%% API
 
 -spec checkout(ref()) ->
     snapshot() | no_return().
@@ -58,11 +58,8 @@ checkout(Reference) ->
 -spec checkout(ref(), transport_opts()) ->
     snapshot() | no_return().
 
-checkout({head, #'Head'{}}, Opts) ->
-    {ok, Snapshot} = dmt_client_cache:get_latest(Opts),
-    Snapshot;
-
-checkout({version, Version}, Opts) ->
+checkout(Reference, Opts) ->
+    Version = ref_to_version(Reference),
     {ok, Snapshot} = dmt_client_cache:get(Version, Opts),
     Snapshot.
 
@@ -75,20 +72,12 @@ checkout_object(Reference, ObjectReference) ->
 -spec checkout_object(ref(), object_ref(), transport_opts()) ->
     dmsl_domain_config_thrift:'VersionedObject'() | no_return().
 
-checkout_object({version, Version}, ObjectReference, _Opts) ->
-    case dmt_client_cache:get_object(Version, ObjectReference) of
+checkout_object(Reference, ObjectReference, Opts) ->
+    Version = ref_to_version(Reference),
+    case dmt_client_cache:get_object(Version, ObjectReference, Opts) of
         {ok, Object} ->
             #'VersionedObject'{version = Version, object = Object};
         {error, _} ->
-            throw(#'ObjectNotFound'{})
-    end;
-
-checkout_object(Reference, ObjectReference, Opts) ->
-    #'Snapshot'{version = Version, domain = Domain} = checkout(Reference, Opts),
-    case dmt_domain:get_object(ObjectReference, Domain) of
-        {ok, Object} ->
-            #'VersionedObject'{version = Version, object = Object};
-        error ->
             throw(#'ObjectNotFound'{})
     end.
 
@@ -122,7 +111,7 @@ pull_range(Version, Limit) ->
 pull_range(Version, Limit, Opts) ->
     dmt_client_api:pull_range(Version, Limit, Opts).
 
-%% Supervisor callbacks
+%%% Supervisor callbacks
 
 -spec init([]) -> {ok, {supervisor:sup_flags(), [supervisor:child_spec()]}}.
 
@@ -130,7 +119,7 @@ init([]) ->
     Cache = #{id => dmt_client_cache, start => {dmt_client_cache, start_link, []}, restart => permanent},
     {ok, {#{strategy => one_for_one, intensity => 10, period => 60}, [Cache]}}.
 
-%% Application callbacks
+%%% Application callbacks
 
 -spec start(normal, any()) -> {ok, pid()} | {error, any()}.
 
@@ -141,3 +130,13 @@ start(_StartType, _StartArgs) ->
 
 stop(_State) ->
     ok.
+
+%%% Internal functions
+
+-spec ref_to_version(ref()) ->
+    version().
+
+ref_to_version({version, Version}) ->
+    Version;
+ref_to_version({head, #'Head'{}}) ->
+    dmt_client_cache:get_last_version().

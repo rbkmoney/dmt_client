@@ -5,13 +5,11 @@
 
 -export([start_link/0]).
 
--export([put/1]).
 -export([get/1]).
 -export([get/2]).
--export([get_latest/0]).
--export([get_latest/1]).
 -export([get_last_version/0]).
 -export([get_object/2]).
+-export([get_object/3]).
 -export([update/0]).
 
 %% gen_server callbacks
@@ -71,13 +69,6 @@
 start_link() ->
     gen_server:start_link({local, ?SERVER}, ?MODULE, [], []).
 
--spec put(dmt_client:snapshot()) ->
-    dmt_client:snapshot().
-
-put(Snapshot) ->
-    ok = cast({put, Snapshot}),
-    Snapshot.
-
 -spec get(dmt_client:version()) ->
     {ok, dmt_client:snapshot()} | {error, woody_error()}.
 
@@ -112,23 +103,6 @@ get_object(Version, ObjectRef, Opts) ->
             call({get_object, Version, ObjectRef, Opts});
         {error, object_not_found} = NotFound ->
             NotFound
-    end.
-
--spec get_latest() ->
-    {ok, dmt_client:snapshot()} | {error, woody_error()}.
-
-get_latest() ->
-    get_latest(undefined).
-
--spec get_latest(dmt_client:transport_opts()) ->
-    {ok, dmt_client:snapshot()} | {error, woody_error()}.
-
-get_latest(Opts) ->
-    case latest_snapshot() of
-        {ok, _Snapshot} = Result ->
-            Result;
-        {error, version_not_found} ->
-            call({get_latest, Opts})
     end.
 
 -spec get_last_version() ->
@@ -174,9 +148,6 @@ handle_call({get_object, Version, ObjectRef, Opts}, _From, State) ->
 handle_call(update, _From, State) ->
     {reply, update_cache(), restart_timer(State)};
 
-handle_call({get_latest, Opts}, _From, State) ->
-    {reply, latest_snapshot_internal(Opts), State};
-
 handle_call({get_snapshot, Version, Opts}, _From, State) ->
     {reply, get_snapshot_internal(Version, Opts), State};
 
@@ -185,10 +156,6 @@ handle_call(_Msg, _From, State) ->
 
 -spec handle_cast(term(), state()) ->
     {noreply, state()}.
-
-handle_cast({put, Snapshot}, State) ->
-    ok = put_snapshot(Snapshot),
-    {noreply, State};
 
 handle_cast(_Msg, State) ->
     {noreply, State}.
@@ -217,17 +184,12 @@ code_change(_OldVsn, State, _Extra) ->
 
 %%% Internal functions
 
--spec cast(term()) ->
-    ok.
-
-cast(Msg) ->
-    gen_server:cast(?SERVER, Msg).
-
 -spec call(term()) ->
     term().
 
 call(Msg) ->
-    call(Msg, ?DEFAULT_CALL_TIMEOUT).
+    DefTimeout = application:get_env(dmt_client, cache_server_call_timeout, ?DEFAULT_CALL_TIMEOUT),
+    call(Msg, DefTimeout).
 
 -spec call(term(), timeout()) ->
     term().
@@ -384,22 +346,6 @@ latest_snapshot() ->
             Error
     end.
 
--spec latest_snapshot_internal(dmt_client:transport_opts()) ->
-    {ok, dmt_client:snapshot()} | {error, woody_error()}.
-
-latest_snapshot_internal(Opts) ->
-    try latest_snapshot() of
-        {ok, _Snapshot} = Result ->
-            Result;
-        {error, version_not_found} ->
-            Snapshot = dmt_client_api:checkout({head, #'Head'{}}, Opts),
-            ok = put_snapshot(Snapshot),
-            {ok, Snapshot}
-    catch
-        error:{woody_error, {_Source, _Class, _Details}} = Error ->
-            {error, Error}
-    end.
-
 -spec do_get_last_version() ->
     {ok, dmt_client:version()} | {error, version_not_found}.
 
@@ -457,7 +403,7 @@ cleanup() ->
     CacheLimits = genlib_app:env(dmt_client, max_cache_size),
     MaxElements = genlib_map:get(elements, CacheLimits, 20),
     MaxMemory = genlib_map:get(memory, CacheLimits, 52428800), % 50Mb by default
-    case Elements > MaxElements orelse Memory > MaxMemory of
+    case Elements > MaxElements orelse (Elements > 1 andalso Memory > MaxMemory) of
         true ->
             ok = remove_earliest(),
             cleanup();
