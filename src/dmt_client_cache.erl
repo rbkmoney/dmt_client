@@ -200,7 +200,12 @@ call(Msg) ->
     term().
 
 call(Msg, Timeout) ->
-    gen_server:call(?SERVER, Msg, Timeout).
+    try
+        gen_server:call(?SERVER, Msg, Timeout)
+    catch
+        exit:{timeout, {gen_server, call, _}} ->
+            woody_error:raise(system, {external, resource_unavailable, <<"dmt_client_cache timeout">>})
+    end.
 
 -spec put_snapshot(dmt_client:snapshot()) ->
     ok.
