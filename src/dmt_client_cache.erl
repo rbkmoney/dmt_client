@@ -49,7 +49,8 @@
 
 -record(snap, {
     vsn :: dmt_client:version(),
-    tid :: ets:tid()
+    tid :: ets:tid(),
+    last_access :: calendar:datetime()
 }).
 
 -type snap() :: #snap{}.
@@ -217,7 +218,11 @@ put_snapshot(#'Snapshot'{version = Version, domain = Domain}) ->
         {error, version_not_found} ->
             TID  = ets:new(?MODULE, ?snapshot_table_opts),
             true = put_domain_to_table(TID, Domain),
-            Snap = #snap{vsn = Version, tid = TID},
+            Snap = #snap{
+                vsn = Version,
+                tid = TID,
+                last_access = datetime()
+            },
             true = ets:insert(?TABLE, Snap),
             cleanup()
     end.
@@ -251,6 +256,7 @@ get_snapshot(Version) ->
 get_snap(Version) ->
     case ets:lookup(?TABLE, Version) of
         [Snap] ->
+            _ = update_last_access(Version),
             {ok, Snap};
         [] ->
             {error, version_not_found}
@@ -474,3 +480,15 @@ remove_earliest(Version) ->
     true = ets:delete(?TABLE, Version),
     true = ets:delete(TID),
     ok.
+
+-spec update_last_access(dmt_client:version()) ->
+    boolean().
+
+update_last_access(Version) ->
+    ets:update_element(?TABLE, Version, {#snap.last_access, datetime()}).
+
+-spec datetime() ->
+    calendar:datetime().
+
+datetime() ->
+    calendar:universal_time().
