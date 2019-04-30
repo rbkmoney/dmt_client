@@ -33,9 +33,9 @@
 -define(meta_table_opts, [
     named_table,
     ordered_set,
-    protected,
+    public,
     {read_concurrency, true},
-    {write_concurrency, false},
+    {write_concurrency, true},
     {keypos, #snap.vsn}
 ]).
 
@@ -47,10 +47,12 @@
     {keypos, #object.ref}
 ]).
 
+-type timestamp() :: integer().
+
 -record(snap, {
     vsn :: dmt_client:version(),
     tid :: ets:tid(),
-    last_access :: calendar:datetime()
+    last_access :: timestamp()
 }).
 
 -type snap() :: #snap{}.
@@ -140,7 +142,7 @@ update() ->
     {ok, state(), 0}.
 
 init(_) ->
-    ?TABLE = ets:new(?TABLE, ?meta_table_opts),
+    ok = create_tables(),
     {ok, #state{}, 0}.
 
 -spec handle_call(term(), {pid(), term()}, state()) ->
@@ -189,6 +191,13 @@ code_change(_OldVsn, State, _Extra) ->
     {ok, State}.
 
 %%% Internal functions
+
+-spec create_tables() ->
+    ok.
+
+create_tables() ->
+    ?TABLE = ets:new(?TABLE, ?meta_table_opts),
+    ok.
 
 -spec call(term()) ->
     term().
@@ -423,14 +432,25 @@ update_cache() ->
     ok.
 
 cleanup() ->
+    Snaps = ets:tab2list(?TABLE),
+    Sorted = lists:keysort(#snap.last_access, Snaps),
+    {ok, HeadVersion} = do_get_last_version(),
+    cleanup(Sorted, HeadVersion).
+
+-spec cleanup([snap()], dmt_client:version()) ->
+    ok.
+
+cleanup([], _HeadVersion) ->
+    ok;
+cleanup(Snaps, HeadVersion) ->
     {Elements, Memory} = get_cache_size(),
     CacheLimits = genlib_app:env(dmt_client, max_cache_size),
     MaxElements = genlib_map:get(elements, CacheLimits, 20),
     MaxMemory = genlib_map:get(memory, CacheLimits, 52428800), % 50Mb by default
     case Elements > MaxElements orelse (Elements > 1 andalso Memory > MaxMemory) of
         true ->
-            ok = remove_earliest(),
-            cleanup();
+            Tail = remove_earliest(Snaps, HeadVersion),
+            cleanup(Tail, HeadVersion);
         false ->
             ok
     end.
@@ -463,20 +483,19 @@ ets_memory(TID) ->
     Info = ets:info(TID),
     proplists:get_value(memory, Info).
 
--spec remove_earliest() ->
+-spec remove_earliest([snap()], dmt_client:version()) ->
+    [snap()].
+
+remove_earliest([#snap{vsn = HeadVersion} | Tail], HeadVersion) ->
+    Tail;
+remove_earliest([Snap | Tail], _HeadVersion) ->
+    remove_snap(Snap),
+    Tail.
+
+-spec remove_snap(snap()) ->
     ok.
 
-remove_earliest() ->
-    % Naive implementation, but probably good enough
-    remove_earliest(ets:first(?TABLE)).
-
--spec remove_earliest('$end_of_table' | dmt_client:version()) ->
-    ok.
-
-remove_earliest('$end_of_table') ->
-    ok;
-remove_earliest(Version) ->
-    {ok, #snap{tid = TID}} = get_snap(Version),
+remove_snap(#snap{tid = TID, vsn = Version}) ->
     true = ets:delete(?TABLE, Version),
     true = ets:delete(TID),
     ok.
@@ -488,7 +507,35 @@ update_last_access(Version) ->
     ets:update_element(?TABLE, Version, {#snap.last_access, datetime()}).
 
 -spec datetime() ->
-    calendar:datetime().
+    timestamp().
 
 datetime() ->
-    calendar:universal_time().
+    os:system_time(microsecond).
+
+%%% Tests
+
+-ifdef(TEST).
+
+-spec test() -> ok.
+-include_lib("eunit/include/eunit.hrl").
+
+-spec cleanup_test() ->
+    ok.
+
+cleanup_test() ->
+    application:set_env(dmt_client, max_cache_size, #{elements => 2, memory =>52428800}),
+    ok = create_tables(),
+    ok = put_snapshot(#'Snapshot'{version = 4, domain = dmt_domain:new()}),
+    ok = timer:sleep(1),
+    ok = put_snapshot(#'Snapshot'{version = 3, domain = dmt_domain:new()}),
+    ok = timer:sleep(1),
+    ok = put_snapshot(#'Snapshot'{version = 2, domain = dmt_domain:new()}),
+    ok = timer:sleep(1),
+    ok = put_snapshot(#'Snapshot'{version = 1, domain = dmt_domain:new()}),
+    [
+        #snap{vsn = 1, _ = _},
+        #snap{vsn = 4, _ = _}
+    ] = ets:tab2list(?TABLE),
+    ok.
+
+-endif. % TEST
