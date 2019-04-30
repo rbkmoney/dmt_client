@@ -271,6 +271,12 @@ get_snap(Version) ->
             {error, version_not_found}
     end.
 
+-spec get_all_snaps() ->
+    [snap()].
+
+get_all_snaps() ->
+    ets:tab2list(?TABLE).
+
 -spec do_get_object(dmt_client:version(), dmt_client:object_ref()) ->
     {ok, dmt_client:domain_object()} | {error, version_not_found | object_not_found}.
 
@@ -432,7 +438,7 @@ update_cache() ->
     ok.
 
 cleanup() ->
-    Snaps = ets:tab2list(?TABLE),
+    Snaps = get_all_snaps(),
     Sorted = lists:keysort(#snap.last_access, Snaps),
     {ok, HeadVersion} = do_get_last_version(),
     cleanup(Sorted, HeadVersion).
@@ -523,7 +529,7 @@ datetime() ->
     ok.
 
 cleanup_test() ->
-    application:set_env(dmt_client, max_cache_size, #{elements => 2, memory =>52428800}),
+    application:set_env(dmt_client, max_cache_size, #{elements => 2, memory => 52428800}),
     ok = create_tables(),
     ok = put_snapshot(#'Snapshot'{version = 4, domain = dmt_domain:new()}),
     ok = timer:sleep(1),
@@ -535,7 +541,7 @@ cleanup_test() ->
     [
         #snap{vsn = 1, _ = _},
         #snap{vsn = 4, _ = _}
-    ] = ets:tab2list(?TABLE),
+    ] = get_all_snaps(),
     ok.
 
 -endif. % TEST
