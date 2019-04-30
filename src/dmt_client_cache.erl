@@ -522,7 +522,7 @@ datetime() ->
 
 -ifdef(TEST).
 
--spec test() -> ok.
+-spec test() -> ok. % dirty hack for warn_missing_spec
 -include_lib("eunit/include/eunit.hrl").
 
 -spec cleanup_test() ->
