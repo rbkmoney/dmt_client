@@ -64,6 +64,20 @@
 
 -type woody_error() :: {woody_error, woody_error:system_error()}.
 
+-type from() :: {pid(), term()}.
+-type fetch_result() :: {ok, dmt_client:snapshot()} | {error, version_not_found | woody_error()}.
+-type dispatch_fun() :: fun((from(), fetch_result()) -> any()).
+-type waiters() :: #{
+    dmt_client:version() => [{from(), dispatch_fun()}]
+}.
+
+-record(state, {
+    timer = undefined :: undefined | reference(),
+    waiters = #{} :: waiters()
+}).
+
+-type state() :: #state{}.
+
 %%% API
 
 -spec start_link() ->
@@ -132,12 +146,6 @@ update() ->
 
 %%% gen_server callbacks
 
--record(state, {
-    timer = undefined :: undefined | reference()
-}).
-
--type state() :: #state{}.
-
 -spec init(_) ->
     {ok, state(), 0}.
 
@@ -148,22 +156,46 @@ init(_) ->
 -spec handle_call(term(), {pid(), term()}, state()) ->
     {reply, term(), state()}.
 
-handle_call({get_object, Version, ObjectRef, Opts}, _From, State) ->
-    Result = get_object_internal(Version, ObjectRef, Opts),
-    {reply, Result, State};
+handle_call({get_object, Version, ObjectRef, Opts}, From, #state{waiters = Waiters} = State) ->
+    case do_get_object(Version, ObjectRef) of
+        {ok, _Object} = Result ->
+            {reply, Result, State};
+        {error, object_not_found} = NotFound ->
+            {reply, NotFound, State};
+        {error, version_not_found} ->
+            DispatchFun = dispatch_object(ObjectRef),
+            NewWaiters  = maybe_fetch(Version, From, DispatchFun, Waiters, Opts),
+            {noreply, State#state{waiters = NewWaiters}}
+    end;
 
 handle_call(update, _From, State) ->
     {reply, update_cache(), restart_timer(State)};
 
-handle_call({get_snapshot, Version, Opts}, _From, State) ->
-    Result = get_snapshot_internal(Version, Opts),
-    {reply, Result, State};
+handle_call({get_snapshot, Version, Opts}, From, #state{waiters = Waiters} = State) ->
+    case get_snapshot(Version) of
+        {ok, _Snapshot} = Result ->
+            {reply, Result, State};
+        {error, version_not_found} ->
+            DispatchFun = fun dispatch_snapshot/2,
+            NewWaiters  = maybe_fetch(Version, From, DispatchFun, Waiters, Opts),
+            {noreply, State#state{waiters = NewWaiters}}
+    end;
 
 handle_call(_Msg, _From, State) ->
     {noreply, State}.
 
 -spec handle_cast(term(), state()) ->
     {noreply, state()}.
+
+handle_cast({dispatch, Version, Result}, #state{waiters = Waiters} = State) ->
+    case Result of
+        {ok, Snapshot} ->
+            put_snapshot(Snapshot);
+        _ ->
+            ok
+    end,
+    _ = [DispatchFun(From, Result) || {From, DispatchFun} <- maps:get(Version, Waiters)],
+    {noreply, State#state{waiters = maps:remove(Version, Waiters)}};
 
 handle_cast(_Msg, State) ->
     {noreply, State}.
@@ -216,6 +248,12 @@ call(Msg, Timeout) ->
         exit:{timeout, {gen_server, call, _}} ->
             woody_error:raise(system, {external, resource_unavailable, <<"dmt_client_cache timeout">>})
     end.
+
+-spec cast(term()) ->
+    ok.
+
+cast(Msg) ->
+    gen_server:cast(?SERVER, Msg).
 
 -spec put_snapshot(dmt_client:snapshot()) ->
     ok.
@@ -302,28 +340,6 @@ get_object_by_snap(#snap{tid = TID}, ObjectRef) ->
             {error, version_not_found}
     end.
 
--spec get_object_internal(dmt_client:version(), dmt_client:object_ref(), dmt_client:transport_opts()) ->
-    {ok, dmt_client:domain_object()} | {error, version_not_found | object_not_found | woody_error()}.
-
-get_object_internal(Version, ObjectRef, Opts) ->
-    try
-        case do_get_object(Version, ObjectRef) of
-            {ok, _Object} = Result ->
-                Result;
-            {error, version_not_found} ->
-                Snapshot = dmt_client_api:checkout({version, Version}, Opts),
-                ok = put_snapshot(Snapshot),
-                get_object_from_snapshot(ObjectRef, Snapshot);
-            {error, object_not_found} = NotFound ->
-                NotFound
-        end
-    catch
-        throw:#'VersionNotFound'{} ->
-            {error, version_not_found};
-        error:{woody_error, {_Source, _Class, _Details}} = Error ->
-            {error, Error}
-    end.
-
 -spec get_object_from_snapshot(dmt_client:object_ref(), dmt_client:snapshot()) ->
     {ok, dmt_client:domain_object()} | {error, object_not_found}.
 
@@ -335,24 +351,64 @@ get_object_from_snapshot(ObjectRef, #'Snapshot'{domain = Domain}) ->
             {error, object_not_found}
     end.
 
--spec get_snapshot_internal(dmt_client:version(), dmt_client:transport_opts()) ->
-    {ok, dmt_client:domain_object()} | {error, version_not_found | woody_error()}.
+-spec maybe_fetch(dmt_client:version(), from(), dispatch_fun(), waiters(), dmt_client:transport_opts()) ->
+    waiters().
 
-get_snapshot_internal(Version, Opts) ->
-    try
-        case get_snapshot(Version) of
-            {ok, _Snapshot} = Result ->
-                Result;
-            {error, version_not_found} ->
-                Snapshot = dmt_client_api:checkout({version, Version}, Opts),
-                ok = put_snapshot(Snapshot),
-                {ok, Snapshot}
+maybe_fetch(Version, From, DispatchFun, Waiters, Opts) ->
+    Prev =
+        case maps:get(Version, Waiters, undefined) of
+            undefined ->
+                _Pid = schedule_fetch(Version, Opts),
+                [];
+            List ->
+                List
+        end,
+    Waiters#{Version => [{From, DispatchFun} | Prev]}.
+
+-spec schedule_fetch(dmt_client:version(), dmt_client:transport_opts()) ->
+    pid().
+
+schedule_fetch(Version, Opts) ->
+    proc_lib:spawn_link(
+        fun() ->
+            Result = fetch(Version, Opts),
+            cast({dispatch, Version, Result})
         end
+    ).
+
+-spec fetch(dmt_client:version(), dmt_client:transport_opts()) ->
+    fetch_result().
+
+fetch(Version, Opts) ->
+    try
+        Snapshot = dmt_client_backend:checkout({version, Version}, Opts),
+        {ok, Snapshot}
     catch
         throw:#'VersionNotFound'{} ->
             {error, version_not_found};
         error:{woody_error, {_Source, _Class, _Details}} = Error ->
             {error, Error}
+    end.
+
+-spec dispatch_snapshot(from(), fetch_result()) ->
+    ignore.
+
+dispatch_snapshot(From, Result) ->
+    gen_server:reply(From, Result).
+
+-spec dispatch_object(dmt_client:object_ref()) ->
+    dispatch_fun().
+
+dispatch_object(ObjectRef) ->
+    fun(From, Result) ->
+        Reply =
+            case Result of
+                {ok, Snapshot} ->
+                    get_object_from_snapshot(ObjectRef, Snapshot);
+                Error ->
+                    Error
+            end,
+        gen_server:reply(From, Reply)
     end.
 
 -spec do_get_snapshot(snap()) ->
@@ -421,11 +477,11 @@ update_cache() ->
         NewHead = case latest_snapshot() of
             {ok, OldHead} ->
                 Limit = genlib_app:env(dmt_client, cache_update_pull_limit, ?DEFAULT_LIMIT),
-                FreshHistory = dmt_client_api:pull_range(OldHead#'Snapshot'.version, Limit, undefined),
+                FreshHistory = dmt_client_backend:pull_range(OldHead#'Snapshot'.version, Limit, undefined),
                 {ok, Head} = dmt_history:head(FreshHistory, OldHead),
                 Head;
             {error, version_not_found} ->
-                dmt_client_api:checkout({head, #'Head'{}}, undefined)
+                dmt_client_backend:checkout({head, #'Head'{}}, undefined)
         end,
         ok = put_snapshot(NewHead),
         {ok, NewHead#'Snapshot'.version}
@@ -518,7 +574,7 @@ update_last_access(Version) ->
 datetime() ->
     os:system_time(microsecond).
 
-%%% Tests
+%%% Unit tests
 
 -ifdef(TEST).
 
