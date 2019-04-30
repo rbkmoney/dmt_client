@@ -48,12 +48,19 @@ groups() ->
             {group, get_snapshot_success},
             {group, snapshot_not_found},
             {group, woody_error},
-            {group, object_not_found}
+            {group, object_not_found},
+            {group, mixed}
         ]},
         {get_snapshot_success, [parallel], lists:duplicate(?tests_count, get_snapshot_success)},
         {snapshot_not_found, [parallel], lists:duplicate(?tests_count, snapshot_not_found)},
         {woody_error, [parallel], lists:duplicate(?tests_count, woody_error)},
-        {object_not_found, [parallel], lists:duplicate(?tests_count, object_not_found)}
+        {object_not_found, [parallel], lists:duplicate(?tests_count, object_not_found)},
+        {mixed, [parallel, shuffle],
+            lists:duplicate(?tests_count, get_snapshot_success) ++
+            lists:duplicate(?tests_count, snapshot_not_found) ++
+            lists:duplicate(?tests_count, woody_error) ++
+            lists:duplicate(?tests_count, object_not_found)
+        }
     ].
 
 -spec init_per_suite(config()) ->
