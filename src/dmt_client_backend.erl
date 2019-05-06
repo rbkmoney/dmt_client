@@ -25,29 +25,25 @@
     dmt_client:version() | no_return().
 
 commit(Version, Commit, Opts) ->
-    ApiMod = get_api_module(),
-    ApiMod:commit(Version, Commit, Opts).
+    call(commit, [Version, Commit, Opts]).
 
 -spec checkout(dmt_client:ref(), dmt_client:transport_opts()) ->
     dmt_client:snapshot() | no_return().
 
 checkout(Reference, Opts) ->
-    ApiMod = get_api_module(),
-    ApiMod:checkout(Reference, Opts).
+    call(checkout, [Reference, Opts]).
 
 -spec checkout_object(dmt_client:ref(), dmt_client:object_ref(), dmt_client:transport_opts()) ->
     dmsl_domain_thrift:'DomainObject'() | no_return().
 
 checkout_object(Reference, ObjectReference, Opts) ->
-    ApiMod = get_api_module(),
-    ApiMod:checkout_object(Reference, ObjectReference, Opts).
+    call(checkout_object, [Reference, ObjectReference, Opts]).
 
 -spec pull_range(dmt_client:version(), dmt_client:limit(), dmt_client:transport_opts()) ->
     dmt_client:history() | no_return().
 
 pull_range(After, Limit, Opts) ->
-    ApiMod = get_api_module(),
-    ApiMod:pull_range(After, Limit, Opts).
+    call(pull_range, [After, Limit, Opts]).
 
 %%% Internal functions
 
@@ -56,3 +52,10 @@ pull_range(After, Limit, Opts) ->
 
 get_api_module() ->
     genlib_app:env(dmt_client, api_module, dmt_client_api).
+
+-spec call(atom(), list()) ->
+    term() | no_return().
+
+call(Fun, Args) ->
+    Module = get_api_module(),
+    erlang:apply(Module, Fun, Args).
