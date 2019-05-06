@@ -168,10 +168,8 @@ handle_call({get_object, Version, ObjectRef, Opts}, From, #state{waiters = Waite
             {noreply, State#state{waiters = NewWaiters}}
     end;
 
-handle_call(update, From, #state{waiters = Waiters} = State) ->
-    DispatchFun = fun dispatch_update/2,
-    NewWaiters  = maybe_fetch({head, #'Head'{}}, From, DispatchFun, Waiters, undefined),
-    {noreply, restart_timer(State#state{waiters = NewWaiters})};
+handle_call(update, From, State) ->
+    update_cache(From, State);
 
 handle_call({get_snapshot, Version, Opts}, From, #state{waiters = Waiters} = State) ->
     case get_snapshot(Version) of
@@ -205,10 +203,8 @@ handle_cast(_Msg, State) ->
 -spec handle_info(term(), state()) ->
     {noreply, state()}.
 
-handle_info(timeout, #state{waiters = Waiters} = State) ->
-    DispatchFun = fun dispatch_update/2,
-    NewWaiters  = maybe_fetch({head, #'Head'{}}, undefined, DispatchFun, Waiters, undefined),
-    {noreply, restart_timer(State#state{waiters = NewWaiters})};
+handle_info(timeout, State) ->
+    update_cache(undefined, State);
 
 handle_info(_Msg, State) ->
     {noreply, State}.
@@ -354,16 +350,24 @@ get_object_from_snapshot(ObjectRef, #'Snapshot'{domain = Domain}) ->
             {error, object_not_found}
     end.
 
+-spec update_cache(from() | undefined, state()) ->
+    {noreply, state()}.
+
+update_cache(From, #state{waiters = Waiters} = State) ->
+    DispatchFun = fun dispatch_update/2,
+    NewWaiters  = maybe_fetch({head, #'Head'{}}, From, DispatchFun, Waiters, undefined),
+    {noreply, restart_timer(State#state{waiters = NewWaiters})}.
+
 -spec maybe_fetch(dmt_client:ref(), from() | undefined, dispatch_fun(), waiters(), dmt_client:transport_opts()) ->
     waiters().
 
 maybe_fetch(Reference, From, DispatchFun, Waiters, Opts) ->
     Prev =
-        case maps:get(Reference, Waiters, undefined) of
-            undefined ->
+        case maps:find(Reference, Waiters) of
+            error ->
                 _Pid = schedule_fetch(Reference, Opts),
                 [];
-            List ->
+            {ok, List} ->
                 List
         end,
     Waiters#{Reference => [{From, DispatchFun} | Prev]}.
@@ -585,7 +589,7 @@ update_last_access(Version) ->
     timestamp().
 
 timestamp() ->
-    os:system_time(microsecond).
+    erlang:monotonic_time(microsecond).
 
 %%% Unit tests
 

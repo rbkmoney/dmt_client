@@ -75,8 +75,8 @@ init_per_suite(C) ->
             memory => 2048 % 2Kb
         }},
         {service_urls, #{
-            'Repository' => <<"dominant:8022/v1/domain/repository">>,
-            'RepositoryClient' => <<"dominant:8022/v1/domain/repository_client">>
+            'Repository' => <<"http://dominant:8022/v1/domain/repository">>,
+            'RepositoryClient' => <<"http://dominant:8022/v1/domain/repository_client">>
         }}
     ]),
     [{apps, Apps}|C].
@@ -105,9 +105,11 @@ checkout({version, ?unavailable_version}, _Opts) ->
     woody_error:raise(system, {external, resource_unavailable, <<"test">>});
 
 checkout({version, ?existing_version}, _Opts) ->
+    timer:sleep(5000),
     #'Snapshot'{version = ?existing_version, domain = dmt_domain:new()};
 
 checkout({head, #'Head'{}}, _Opts) ->
+    timer:sleep(5000),
     #'Snapshot'{version = ?existing_version, domain = dmt_domain:new()}.
 
 -spec checkout_object(dmt_client:ref(), dmt_client:object_ref(), dmt_client:transport_opts()) ->
@@ -120,6 +122,7 @@ checkout_object(_Reference, _ObjectReference, _Opts) ->
     dmt_client:history() | no_return().
 
 pull_range(_Version, _Limit, _Opts) ->
+    timer:sleep(5000),
     #{}.
 
 %%% Tests
