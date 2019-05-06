@@ -36,7 +36,10 @@ call(ServiceName, Function, Args, TransportOpts) ->
     Call = {Service, Function, Args},
     Opts = #{
         url => Url,
-        event_handler => scoper_woody_event_handler,
+        event_handler => [
+            scoper_woody_event_handler,
+            hay_woody_event_handler
+        ],
         transport_opts => ensure_transport_opts(TransportOpts)
     },
     Context = woody_context:new(),
