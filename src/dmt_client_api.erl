@@ -63,7 +63,7 @@ get_service_module('RepositoryClient') ->
 get_event_handlers() ->
     lists:umerge(
         [scoper_woody_event_handler],
-        genlib_app:env(dmt_client, event_handlers, [])
+        genlib_app:env(dmt_client, woody_event_handlers, [])
     ).
 
 -spec ensure_transport_opts(dmt_client:transport_opts()) ->
