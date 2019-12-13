@@ -36,13 +36,6 @@ init_per_suite(C) ->
             elements => 1,
             memory => 2048 % 2Kb
         }},
-        {scoper_event_handler_options, #{
-            event_handler_opts => #{
-                formatter_opts => #{
-                    max_length => 1000
-                }
-            }
-        }},
         {service_urls, #{
             'Repository' => <<"http://dominant:8022/v1/domain/repository">>,
             'RepositoryClient' => <<"http://dominant:8022/v1/domain/repository_client">>
