@@ -157,7 +157,7 @@ health_check() ->
 init([]) ->
     Cache = #{id => dmt_client_cache, start => {dmt_client_cache, start_link, []}, restart => permanent},
     {ok, {#{
-        strategy => one_for_one, intensity => 10, period => 60}, 
+        strategy => one_for_one, intensity => 10, period => 60},
         [
             Cache,
             get_health_spec()
