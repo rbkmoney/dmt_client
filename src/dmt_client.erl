@@ -15,6 +15,12 @@
 -export([get_last_version/0]).
 -export([pull_range/2]).
 -export([pull_range/3]).
+-export([has_last_version/0]).
+-export([has_version/1]).
+
+%% Health check API
+
+-export([health_check/0]).
 
 %% Supervisor callbacks
 -export([init/1]).
@@ -117,13 +123,74 @@ pull_range(Version, Limit) ->
 pull_range(Version, Limit, Opts) ->
     dmt_client_backend:pull_range(Version, Limit, Opts).
 
+-spec has_last_version() ->
+    boolean().
+
+has_last_version() ->
+    has_version({head, #'Head'{}}).
+
+-spec has_version(version() | ref()) ->
+    boolean().
+
+has_version(RefOrVersion) ->
+    dmt_client_cache:has_version(maybe_ref_to_version(RefOrVersion)).
+
+%% Health check API
+
+-spec health_check() ->
+    erl_health:result().
+
+health_check() ->
+    case has_last_version() of
+        true ->
+            {passing, #{}};
+        false ->
+            {critical, #{last_version => not_found}}
+    end.
+
 %%% Supervisor callbacks
+
+-define(DEFAULT_HANDLING_TIMEOUT, 30000).  % 30 seconds
 
 -spec init([]) -> {ok, {supervisor:sup_flags(), [supervisor:child_spec()]}}.
 
 init([]) ->
     Cache = #{id => dmt_client_cache, start => {dmt_client_cache, start_link, []}, restart => permanent},
-    {ok, {#{strategy => one_for_one, intensity => 10, period => 60}, [Cache]}}.
+    {ok, {#{
+        strategy => one_for_one, intensity => 10, period => 60}, 
+        [
+            Cache,
+            get_health_spec()
+        ]
+    }}.
+
+get_health_spec() ->
+    {ok, Ip} = inet:parse_address(genlib_app:env(?MODULE, ip, "::")),
+    DefaultTimeout = genlib_app:env(?MODULE, default_woody_handling_timeout, ?DEFAULT_HANDLING_TIMEOUT),
+    Opts = #{
+        default_handling_timeout => DefaultTimeout
+    },
+    HealthRoutes = construct_health_routes(genlib_app:env(?MODULE, health_check, #{})),
+    woody_server:child_spec(
+        ?MODULE,
+        #{
+            ip            => Ip,
+            port          => genlib_app:env(?MODULE, port, 8022),
+            transport_opts => genlib_app:env(?MODULE, transport_opts, #{}),
+            protocol_opts => genlib_app:env(?MODULE, protocol_opts, #{}),
+            event_handler => {scoper_woody_event_handler, Opts},
+            handlers      => [],
+            additional_routes => HealthRoutes,
+            shutdown_timeout => genlib_app:env(?MODULE, shutdown_timeout, 0)
+        }
+    ).
+
+construct_health_routes(Check) ->
+    [erl_health_handle:get_route(enable_health_logging(Check))].
+
+enable_health_logging(Check) ->
+    EvHandler = {erl_health_event_handler, []},
+    maps:map(fun (_, V = {_, _, _}) -> #{runner => V, event_handler => EvHandler} end, Check).
 
 %%% Application callbacks
 
@@ -146,3 +213,14 @@ ref_to_version({version, Version}) ->
     Version;
 ref_to_version({head, #'Head'{}}) ->
     dmt_client_cache:get_last_version().
+
+
+-spec maybe_ref_to_version(ref() | version()) ->
+    version().
+
+maybe_ref_to_version({version, Version}) ->
+    Version;
+maybe_ref_to_version({head, #'Head'{}}) ->
+    dmt_client_cache:get_last_version();
+maybe_ref_to_version(Version) ->
+    Version.

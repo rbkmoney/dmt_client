@@ -11,6 +11,7 @@
 -export([get_object/2]).
 -export([get_object/3]).
 -export([update/0]).
+-export([has_version/1]).
 
 %% gen_server callbacks
 
@@ -143,6 +144,17 @@ get_last_version() ->
 
 update() ->
     call(update).
+
+-spec has_version(dmt_client:version()) ->
+    boolean().
+
+has_version(Version) ->
+    case do_get_last_version() of
+        {ok, Version} ->
+            true;
+        {error, version_not_found} ->
+            false
+    end.
 
 %%% gen_server callbacks
 
