@@ -163,7 +163,7 @@ get_health_spec() ->
         #{
             ip                  => Ip,
             port                => genlib_app:env(?MODULE, port, 8022),
-            transport_opts      => genlib_app:env(?MODULE, transport_opts, #{}),
+            transport_opts      => genlib_app:env(?MODULE, transport_server_opts, #{}),
             protocol_opts       => genlib_app:env(?MODULE, protocol_opts, #{}),
             event_handler       => {scoper_woody_event_handler, Opts},
             handlers            => [],
