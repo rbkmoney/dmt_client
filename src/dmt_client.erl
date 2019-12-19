@@ -162,12 +162,15 @@ get_health_spec() ->
             port                => genlib_app:env(?MODULE, port, 8022),
             transport_opts      => genlib_app:env(?MODULE, server_transport_opts, #{}),
             protocol_opts       => genlib_app:env(?MODULE, protocol_opts, #{}),
-            event_handler       => {scoper_woody_event_handler, Opts},
+            event_handler       => get_event_handlers(),
             handlers            => [],
             additional_routes   => HealthRoutes,
             shutdown_timeout    => genlib_app:env(?MODULE, shutdown_timeout, 0)
         }
     ).
+
+get_event_handlers() ->
+    genlib_app:env(dmt_client, server_woody_event_handlers, []).
 
 construct_health_routes(Check) ->
     [erl_health_handle:get_route(enable_health_logging(Check))].
