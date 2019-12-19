@@ -150,10 +150,6 @@ init([]) ->
 
 get_health_spec() ->
     {ok, Ip} = inet:parse_address(genlib_app:env(?MODULE, ip, "::")),
-    EventHandlerOpts = genlib_app:env(?MODULE, event_handler_opts, #{}),
-    Opts = #{
-        event_handler_opts => EventHandlerOpts
-    },
     HealthRoutes = construct_health_routes(genlib_app:env(?MODULE, health_check, #{})),
     woody_server:child_spec(
         ?MODULE,
