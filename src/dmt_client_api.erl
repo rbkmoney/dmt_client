@@ -70,4 +70,4 @@ ensure_transport_opts(Opts) when is_map(Opts) ->
     Opts;
 ensure_transport_opts(undefined) ->
     Default = #{recv_timeout => 60000, connect_timeout => 1000},
-    genlib_app:env(dmt_client, transport_client_opts, Default).
+    genlib_app:env(dmt_client, client_transport_opts, Default).

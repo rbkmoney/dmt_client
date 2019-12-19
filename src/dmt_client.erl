@@ -17,7 +17,6 @@
 -export([pull_range/3]).
 
 %% Health check API
-
 -export([health_check/0]).
 
 %% Supervisor callbacks
@@ -137,8 +136,6 @@ health_check() ->
 
 %%% Supervisor callbacks
 
--define(DEFAULT_HANDLING_TIMEOUT, 30000).  % 30 seconds
-
 -spec init([]) -> {ok, {supervisor:sup_flags(), [supervisor:child_spec()]}}.
 
 init([]) ->
@@ -153,9 +150,9 @@ init([]) ->
 
 get_health_spec() ->
     {ok, Ip} = inet:parse_address(genlib_app:env(?MODULE, ip, "::")),
-    DefaultTimeout = genlib_app:env(?MODULE, default_woody_handling_timeout, ?DEFAULT_HANDLING_TIMEOUT),
+    EventHandlerOpts = genlib_app:env(?MODULE, event_handler_opts, #{}),
     Opts = #{
-        default_handling_timeout => DefaultTimeout
+        event_handler_opts => EventHandlerOpts
     },
     HealthRoutes = construct_health_routes(genlib_app:env(?MODULE, health_check, #{})),
     woody_server:child_spec(
@@ -163,7 +160,7 @@ get_health_spec() ->
         #{
             ip                  => Ip,
             port                => genlib_app:env(?MODULE, port, 8022),
-            transport_opts      => genlib_app:env(?MODULE, transport_server_opts, #{}),
+            transport_opts      => genlib_app:env(?MODULE, server_transport_opts, #{}),
             protocol_opts       => genlib_app:env(?MODULE, protocol_opts, #{}),
             event_handler       => {scoper_woody_event_handler, Opts},
             handlers            => [],
