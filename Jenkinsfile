@@ -18,5 +18,5 @@ build('dmt_client', 'docker-host', finalHook) {
     pipeErlangLib = load("${env.JENKINS_LIB}/pipeErlangLib.groovy")
   }
 
-  pipeErlangLib.runPipe(false, false, 'dialyze')
+  pipeErlangLib.runPipe(true, false, 'dialyze')
 }
