@@ -234,7 +234,7 @@ do_get_object(Version, ObjectRef) ->
             {error, object_not_found}
     catch
         % table was deleted
-        % DISCUSS: is it correct though? Wouldn't recuring back to original function be better?
+        % DISCUSS(ED-185): is it correct though? Wouldn't recuring back to original function be better?
         % This way, we can fetch wiped snapshot again only for this version
         error:badarg ->
             {error, version_not_found}
