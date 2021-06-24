@@ -6,11 +6,11 @@
 
 -export([start_link/0]).
 
--export([get/1]).
 -export([get/2]).
--export([get_last_version/0]).
--export([get_object/2]).
 -export([get_object/3]).
+-export([get_objects_by_type/3]).
+-export([fold_objects/4]).
+-export([get_last_version/0]).
 -export([update/0]).
 
 %% gen_server callbacks
@@ -24,12 +24,12 @@
 
 -define(TABLE, ?MODULE).
 -define(SERVER, ?MODULE).
--define(DEFAULT_INTERVAL, 5000).
+-define(DEFAULT_UPDATE_INTERVAL, 5000).
+-define(DEFAULT_CLEANUP_INTERVAL, 5000).
 -define(DEFAULT_LIMIT, 10).
 -define(DEFAULT_CALL_TIMEOUT, 10000).
 
 -include_lib("damsel/include/dmsl_domain_config_thrift.hrl").
--include_lib("stdlib/include/ms_transform.hrl").
 
 -define(meta_table_opts, [
     named_table,
@@ -41,27 +41,47 @@
 ]).
 
 -define(snapshot_table_opts, [
-    set,
+    ordered_set,
     protected,
     {read_concurrency, true},
     {write_concurrency, false},
     {keypos, #object.ref}
 ]).
 
+-define(USERS_TABLE, dmt_client_cache_users).
+
+-define(users_table_opts, [
+    named_table,
+    bag,
+    public,
+    {read_concurrency, false},
+    {write_concurrency, true},
+    {keypos, #user.vsn}
+]).
+
 -type timestamp() :: integer().
 
 -record(snap, {
-    vsn :: dmt_client:version(),
+    vsn :: dmt_client:vsn(),
     tid :: ets:tid(),
+    cached_at :: timestamp(),
     last_access :: timestamp()
 }).
 
 -type snap() :: #snap{}.
 
 -record(object, {
-    ref :: dmt_client:object_ref(),
-    obj :: dmt_client:domain_object()
+    ref :: dmt_client:object_ref() | ets_match(),
+    obj :: dmt_client:domain_object() | ets_match()
 }).
+
+-record(user, {
+    vsn :: dmt_client:vsn() | ets_match(),
+    requested_at :: timestamp() | ets_match(),
+    pid :: pid() | ets_match()
+}).
+
+-type ets_match() :: '_' | '$1' | {atom(), ets_match()}.
 
 -type woody_error() :: {woody_error, woody_error:system_error()}.
 
@@ -73,7 +93,8 @@
 }.
 
 -record(state, {
-    timer = undefined :: undefined | reference(),
+    update_timer = undefined :: undefined | reference(),
+    cleanup_timer = undefined :: undefined | reference(),
     waiters = #{} :: waiters()
 }).
 
@@ -85,38 +106,27 @@
 start_link() ->
     gen_server:start_link({local, ?SERVER}, ?MODULE, [], []).
 
--spec get(dmt_client:version()) -> {ok, dmt_client:snapshot()} | {error, version_not_found | woody_error()}.
-get(Version) ->
-    get(Version, undefined).
-
--spec get(dmt_client:version(), dmt_client:transport_opts()) ->
+-spec get(dmt_client:vsn(), dmt_client:transport_opts()) ->
     {ok, dmt_client:snapshot()} | {error, version_not_found | woody_error()}.
 get(Version, Opts) ->
-    case get_snapshot(Version) of
-        {ok, _Snapshot} = Result ->
-            Result;
-        {error, version_not_found} ->
-            call({get_snapshot, Version, Opts})
-    end.
+    with_version(Version, Opts, fun() -> do_get(Version) end).
 
--spec get_object(dmt_client:version(), dmt_client:object_ref()) ->
-    {ok, dmt_client:domain_object()} | {error, version_not_found | object_not_found | woody_error()}.
-get_object(Version, ObjectRef) ->
-    get_object(Version, ObjectRef, undefined).
-
--spec get_object(dmt_client:version(), dmt_client:object_ref(), dmt_client:transport_opts()) ->
+-spec get_object(dmt_client:vsn(), dmt_client:object_ref(), dmt_client:transport_opts()) ->
     {ok, dmt_client:domain_object()} | {error, version_not_found | object_not_found | woody_error()}.
 get_object(Version, ObjectRef, Opts) ->
-    case do_get_object(Version, ObjectRef) of
-        {ok, _Object} = Result ->
-            Result;
-        {error, version_not_found} ->
-            call({get_object, Version, ObjectRef, Opts});
-        {error, object_not_found} = NotFound ->
-            NotFound
-    end.
+    with_version(Version, Opts, fun() -> do_get_object(Version, ObjectRef) end).
 
--spec get_last_version() -> dmt_client:version() | no_return().
+-spec get_objects_by_type(dmt_client:vsn(), dmt_client:object_type(), dmt_client:transport_opts()) ->
+    {ok, [dmt_client:domain_object()]} | {error, version_not_found | woody_error()}.
+get_objects_by_type(Version, ObjectType, Opts) ->
+    with_version(Version, Opts, fun() -> do_get_objects_by_type(Version, ObjectType) end).
+
+-spec fold_objects(dmt_client:vsn(), dmt_client:object_folder(Acc), Acc, dmt_client:transport_opts()) ->
+    {ok, Acc} | {error, version_not_found | woody_error()}.
+fold_objects(Version, Folder, Acc, Opts) ->
+    with_version(Version, Opts, fun() -> do_fold_objects(Version, Folder, Acc) end).
+
+-spec get_last_version() -> dmt_client:vsn() | no_return().
 get_last_version() ->
     case do_get_last_version() of
         {ok, Version} ->
@@ -130,59 +140,53 @@ get_last_version() ->
             end
     end.
 
--spec update() -> {ok, dmt_client:version()} | {error, woody_error()}.
+-spec update() -> {ok, dmt_client:vsn()} | {error, woody_error()}.
 update() ->
     call(update).
 
 %%% gen_server callbacks
 
--spec init(_) -> {ok, state(), 0}.
+-spec init(_) -> {ok, state()}.
 init(_) ->
     ok = create_tables(),
-    {ok, #state{}, 0}.
+    self() ! {update_timer, timeout},
+    {ok, restart_cleanup_timer(#state{})}.
 
 -spec handle_call(term(), {pid(), term()}, state()) -> {reply, term(), state()}.
-handle_call({get_object, Version, ObjectRef, Opts}, From, #state{waiters = Waiters} = State) ->
-    case do_get_object(Version, ObjectRef) of
-        {ok, _Object} = Result ->
-            {reply, Result, State};
-        {error, object_not_found} = NotFound ->
-            {reply, NotFound, State};
-        {error, version_not_found} ->
-            DispatchFun = dispatch_object(ObjectRef),
-            NewWaiters = maybe_fetch({version, Version}, From, DispatchFun, Waiters, Opts),
-            {noreply, State#state{waiters = NewWaiters}}
+handle_call({fetch_version, Version, Timestamp, Opts}, From, State) ->
+    Reference = {version, Version},
+    case ets:member(?TABLE, Version) of
+        true ->
+            %% Caller had to request version via server =>
+            %% version was not available before the call,
+            %% but server already fetched it in between the calls
+            add_users(Reference, [{From, Timestamp, undefined}]),
+            {reply, {ok, Version}, State};
+        false ->
+            {noreply, fetch_by_reference(Reference, From, Timestamp, Opts, State)}
     end;
 handle_call(update, From, State) ->
-    update_cache(From, State);
-handle_call({get_snapshot, Version, Opts}, From, #state{waiters = Waiters} = State) ->
-    case get_snapshot(Version) of
-        {ok, _Snapshot} = Result ->
-            {reply, Result, State};
-        {error, version_not_found} ->
-            DispatchFun = fun dispatch_snapshot/2,
-            NewWaiters = maybe_fetch({version, Version}, From, DispatchFun, Waiters, Opts),
-            {noreply, State#state{waiters = NewWaiters}}
-    end;
+    {noreply, update(From, State)};
 handle_call(_Msg, _From, State) ->
     {noreply, State}.
 
 -spec handle_cast(term(), state()) -> {noreply, state()}.
 handle_cast({dispatch, Reference, Result}, #state{waiters = Waiters} = State) ->
-    case Result of
-        {ok, Snapshot} ->
-            put_snapshot(Snapshot);
-        _ ->
-            ok
-    end,
-    _ = [DispatchFun(From, Result) || {From, DispatchFun} <- maps:get(Reference, Waiters, [])],
+    VersionWaiters = maps:get(Reference, Waiters, []),
+    add_users(Reference, VersionWaiters),
+    _ = [DispatchFun(From, Result) || {From, _TS, DispatchFun} <- VersionWaiters],
     {noreply, State#state{waiters = maps:remove(Reference, Waiters)}};
+handle_cast(update, State) ->
+    {noreply, update(undefined, State)};
 handle_cast(_Msg, State) ->
     {noreply, State}.
 
 -spec handle_info(term(), state()) -> {noreply, state()}.
-handle_info(timeout, State) ->
-    update_cache(undefined, State);
+handle_info({update_timer, timeout}, State) ->
+    {noreply, update(undefined, State)};
+handle_info({cleanup_timer, timeout}, State) ->
+    cleanup(),
+    {noreply, State};
 handle_info(_Msg, State) ->
     {noreply, State}.
 
@@ -196,9 +200,20 @@ code_change(_OldVsn, State, _Extra) ->
 
 %%% Internal functions
 
+%% update op: nothing to do
+add_users({head, _}, _Waiters) ->
+    ok;
+add_users({version, Version}, Waiters) ->
+    [
+        ets:insert(?USERS_TABLE, #user{vsn = Version, requested_at = TS, pid = Pid})
+        || {{Pid, TS, _}, _} <- Waiters, TS /= undefined
+    ],
+    ok.
+
 -spec create_tables() -> ok.
 create_tables() ->
     ?TABLE = ets:new(?TABLE, ?meta_table_opts),
+    ?USERS_TABLE = ets:new(?USERS_TABLE, ?users_table_opts),
     ok.
 
 -spec call(term()) -> term().
@@ -219,21 +234,108 @@ call(Msg, Timeout) ->
 cast(Msg) ->
     gen_server:cast(?SERVER, Msg).
 
+with_version(Version, Opts, Fun) ->
+    TS = timestamp(),
+    Result =
+        case ets:member(?TABLE, Version) of
+            true ->
+                {ok, Version};
+            false ->
+                case call({fetch_version, Version, TS, Opts}) of
+                    {ok, Version} -> {fetched, Version};
+                    AsIs -> AsIs
+                end
+        end,
+    try
+        case Result of
+            {ok, Version} ->
+                Fun();
+            {fetched, Version} ->
+                try
+                    Fun()
+                catch
+                    Class:Reason:Stacktrace ->
+                        erlang:raise(Class, Reason, Stacktrace)
+                after
+                    %% Notify that we finished working on ets copy for further possible cleanup
+                    unlock_version(Version, TS)
+                end;
+            Error ->
+                Error
+        end
+    catch
+        throw:cache_miss ->
+            with_version(Version, Opts, Fun)
+    end.
+
+-spec do_get(dmt_client:vsn()) -> {ok, dmt_client:snapshot()} | {error, version_not_found}.
+do_get(Version) ->
+    case get_snap(Version) of
+        {ok, Snap} ->
+            {ok, build_snapshot(Snap)};
+        {error, version_not_found} = Error ->
+            Error
+    end.
+
+-spec do_get_object(dmt_client:vsn(), dmt_client:object_ref()) ->
+    {ok, dmt_client:domain_object()} | {error, object_not_found} | no_return().
+do_get_object(Version, ObjectRef) ->
+    {ok, #snap{tid = TID}} = get_snap(Version),
+    try ets:lookup(TID, ObjectRef) of
+        [#object{obj = Object}] ->
+            {ok, Object};
+        [] ->
+            {error, object_not_found}
+    catch
+        % table was deleted
+        error:badarg ->
+            throw(cache_miss)
+    end.
+
+do_get_objects_by_type(Version, ObjectType) ->
+    {ok, #snap{tid = TID}} = get_snap(Version),
+    MatchSpec = [
+        {#object{ref = '_', obj = {ObjectType, '$1'}}, [], ['$1']}
+    ],
+    try ets:select(TID, MatchSpec) of
+        Result ->
+            {ok, Result}
+    catch
+        % table was deleted
+        error:badarg ->
+            throw(cache_miss)
+    end.
+
+do_fold_objects(Version, Folder, Acc) ->
+    {ok, #snap{tid = TID}} = get_snap(Version),
+    MappedFolder = fun({object, {Type, _Ref}, {Type, Object}}, AccIn) ->
+        Folder(Type, Object, AccIn)
+    end,
+    try ets:foldl(MappedFolder, Acc, TID) of
+        Result ->
+            {ok, Result}
+    catch
+        % table was deleted
+        error:badarg ->
+            throw(cache_miss)
+    end.
+
 -spec put_snapshot(dmt_client:snapshot()) -> ok.
 put_snapshot(#'Snapshot'{version = Version, domain = Domain}) ->
     case get_snap(Version) of
         {ok, _Snap} ->
             ok;
         {error, version_not_found} ->
-            TID = ets:new(?MODULE, ?snapshot_table_opts),
+            TID = ets:new(?MODULE, [{heir, whereis(?SERVER), ok}] ++ ?snapshot_table_opts),
             true = put_domain_to_table(TID, Domain),
             Snap = #snap{
                 vsn = Version,
                 tid = TID,
+                cached_at = timestamp(),
                 last_access = timestamp()
             },
             true = ets:insert(?TABLE, Snap),
-            cleanup()
+            ok
     end.
 
 -spec put_domain_to_table(ets:tid(), dmt_client:domain()) -> true.
@@ -246,16 +348,7 @@ put_domain_to_table(TID, Domain) ->
         Domain
     ).
 
--spec get_snapshot(dmt_client:version()) -> {ok, dmt_client:snapshot()} | {error, version_not_found}.
-get_snapshot(Version) ->
-    case get_snap(Version) of
-        {ok, Snap} ->
-            do_get_snapshot(Snap);
-        {error, version_not_found} = Error ->
-            Error
-    end.
-
--spec get_snap(dmt_client:version()) -> {ok, snap()} | {error, version_not_found}.
+-spec get_snap(dmt_client:vsn()) -> {ok, snap()} | {error, version_not_found}.
 get_snap(Version) ->
     case ets:lookup(?TABLE, Version) of
         [Snap] ->
@@ -269,49 +362,23 @@ get_snap(Version) ->
 get_all_snaps() ->
     ets:tab2list(?TABLE).
 
--spec do_get_object(dmt_client:version(), dmt_client:object_ref()) ->
-    {ok, dmt_client:domain_object()} | {error, version_not_found | object_not_found}.
-do_get_object(Version, ObjectRef) ->
-    case get_snap(Version) of
-        {ok, Snap} ->
-            get_object_by_snap(Snap, ObjectRef);
-        {error, version_not_found} = Error ->
-            Error
-    end.
+update(From, State) ->
+    restart_update_timer(fetch_by_reference({head, #'Head'{}}, From, undefined, undefined, State)).
 
--spec get_object_by_snap(snap(), dmt_client:object_ref()) ->
-    {ok, dmt_client:domain_object()} | {error, version_not_found | object_not_found}.
-get_object_by_snap(#snap{tid = TID}, ObjectRef) ->
-    try ets:lookup(TID, ObjectRef) of
-        [#object{obj = Object}] ->
-            {ok, Object};
-        [] ->
-            {error, object_not_found}
-    catch
-        % table was deleted
-        error:badarg ->
-            {error, version_not_found}
-    end.
+fetch_by_reference(Reference, From, Timestamp, Opts, #state{waiters = Waiters} = State) ->
+    DispatchFun = fun dispatch_reply/2,
+    NewWaiters = maybe_fetch(Reference, From, Timestamp, DispatchFun, Waiters, Opts),
+    State#state{waiters = NewWaiters}.
 
--spec get_object_from_snapshot(dmt_client:object_ref(), dmt_client:snapshot()) ->
-    {ok, dmt_client:domain_object()} | {error, object_not_found}.
-get_object_from_snapshot(ObjectRef, #'Snapshot'{domain = Domain}) ->
-    case dmt_domain:get_object(ObjectRef, Domain) of
-        {ok, _Object} = Result ->
-            Result;
-        error ->
-            {error, object_not_found}
-    end.
-
--spec update_cache(from() | undefined, state()) -> {noreply, state()}.
-update_cache(From, #state{waiters = Waiters} = State) ->
-    DispatchFun = fun dispatch_update/2,
-    NewWaiters = maybe_fetch({head, #'Head'{}}, From, DispatchFun, Waiters, undefined),
-    {noreply, restart_timer(State#state{waiters = NewWaiters})}.
-
--spec maybe_fetch(dmt_client:ref(), from() | undefined, dispatch_fun(), waiters(), dmt_client:transport_opts()) ->
-    waiters().
-maybe_fetch(Reference, From, DispatchFun, Waiters, Opts) ->
+-spec maybe_fetch(
+    dmt_client:ref(),
+    from() | undefined,
+    timestamp() | undefined,
+    dispatch_fun(),
+    waiters(),
+    dmt_client:transport_opts()
+) -> waiters().
+maybe_fetch(Reference, ReplyTo, Timestamp, DispatchFun, Waiters, Opts) ->
     Prev =
         case maps:find(Reference, Waiters) of
             error ->
@@ -320,13 +387,20 @@ maybe_fetch(Reference, From, DispatchFun, Waiters, Opts) ->
             {ok, List} ->
                 List
         end,
-    Waiters#{Reference => [{From, DispatchFun} | Prev]}.
+    Waiters#{Reference => [{ReplyTo, Timestamp, DispatchFun} | Prev]}.
 
 -spec schedule_fetch(dmt_client:ref(), dmt_client:transport_opts()) -> pid().
 schedule_fetch(Reference, Opts) ->
     proc_lib:spawn_link(
         fun() ->
-            Result = fetch(Reference, Opts),
+            Result =
+                case fetch(Reference, Opts) of
+                    {ok, Snapshot} ->
+                        put_snapshot(Snapshot),
+                        {ok, Snapshot#'Snapshot'.version};
+                    {error, _} = Error ->
+                        Error
+                end,
             cast({dispatch, Reference, Result})
         end
     ).
@@ -348,47 +422,32 @@ do_fetch({head, #'Head'{}}, Opts) ->
     case latest_snapshot() of
         {ok, OldHead} ->
             Limit = genlib_app:env(dmt_client, cache_update_pull_limit, ?DEFAULT_LIMIT),
-            FreshHistory = dmt_client_backend:pull_range(OldHead#'Snapshot'.version, Limit, Opts),
-            {ok, Head} = dmt_history:head(FreshHistory, OldHead),
-            Head;
+            update_head(OldHead, Limit, Opts);
         {error, version_not_found} ->
             dmt_client_backend:checkout({head, #'Head'{}}, Opts)
     end;
 do_fetch(Reference, Opts) ->
     dmt_client_backend:checkout(Reference, Opts).
 
--spec dispatch_snapshot(from() | undefined, fetch_result()) -> ok.
-dispatch_snapshot(undefined, _Result) ->
-    ok;
-dispatch_snapshot(From, Result) ->
-    _ = gen_server:reply(From, Result),
-    ok.
-
--spec dispatch_object(dmt_client:object_ref()) -> dispatch_fun().
-dispatch_object(ObjectRef) ->
-    fun(From, Result) ->
-        Reply =
-            case Result of
-                {ok, Snapshot} ->
-                    get_object_from_snapshot(ObjectRef, Snapshot);
-                Error ->
-                    Error
-            end,
-        gen_server:reply(From, Reply)
+update_head(Head, PullLimit, Opts) ->
+    FreshHistory = dmt_client_backend:pull_range(Head#'Snapshot'.version, PullLimit, Opts),
+    {ok, NewHead} = dmt_history:head(FreshHistory, Head),
+    %% Received history is smaller then PullLimit => reached the top of changes
+    case map_size(FreshHistory) < PullLimit of
+        true -> NewHead;
+        false -> update_head(NewHead, PullLimit, Opts)
     end.
 
--spec dispatch_update(from() | undefined, fetch_result()) -> ok.
-dispatch_update(undefined, _Result) ->
+-spec dispatch_reply(from() | undefined, fetch_result()) -> _.
+dispatch_reply(undefined, _Result) ->
     ok;
-dispatch_update(From, {ok, #'Snapshot'{version = Version}}) ->
-    _ = gen_server:reply(From, {ok, Version}),
-    ok;
-dispatch_update(From, Error) ->
-    _ = gen_server:reply(From, Error),
-    ok.
+dispatch_reply(From, {ok, Version}) ->
+    gen_server:reply(From, {ok, Version});
+dispatch_reply(From, Error) ->
+    gen_server:reply(From, Error).
 
--spec do_get_snapshot(snap()) -> {ok, dmt_client:snapshot()} | {error, version_not_found}.
-do_get_snapshot(#snap{vsn = Version, tid = TID}) ->
+-spec build_snapshot(snap()) -> dmt_client:snapshot() | no_return().
+build_snapshot(#snap{vsn = Version, tid = TID}) ->
     try
         Domain = ets:foldl(
             fun(#object{obj = Object}, Domain) ->
@@ -398,23 +457,28 @@ do_get_snapshot(#snap{vsn = Version, tid = TID}) ->
             dmt_domain:new(),
             TID
         ),
-        {ok, #'Snapshot'{version = Version, domain = Domain}}
+        #'Snapshot'{version = Version, domain = Domain}
     catch
         % table was deleted due to cleanup process or crash
         error:badarg ->
-            {error, version_not_found}
+            throw(cache_miss)
     end.
 
 -spec latest_snapshot() -> {ok, dmt_client:snapshot()} | {error, version_not_found}.
 latest_snapshot() ->
     case do_get_last_version() of
         {ok, Version} ->
-            get_snapshot(Version);
+            try
+                do_get(Version)
+            catch
+                throw:cache_miss ->
+                    latest_snapshot()
+            end;
         {error, version_not_found} = Error ->
             Error
     end.
 
--spec do_get_last_version() -> {ok, dmt_client:version()} | {error, version_not_found}.
+-spec do_get_last_version() -> {ok, dmt_client:vsn()} | {error, version_not_found}.
 do_get_last_version() ->
     case ets:last(?TABLE) of
         '$end_of_table' ->
@@ -423,26 +487,57 @@ do_get_last_version() ->
             {ok, Version}
     end.
 
--spec restart_timer(state()) -> state().
-restart_timer(State = #state{timer = undefined}) ->
-    start_timer(State);
-restart_timer(State = #state{timer = TimerRef}) ->
-    _ = erlang:cancel_timer(TimerRef),
-    start_timer(State#state{timer = undefined}).
+-spec restart_update_timer(state()) -> state().
+restart_update_timer(State = #state{update_timer = TimerRef}) ->
+    cancel_timer(TimerRef),
+    Interval = genlib_app:env(dmt_client, cache_update_interval, ?DEFAULT_UPDATE_INTERVAL),
+    State#state{update_timer = erlang:send_after(Interval, self(), {update_timer, timeout})}.
 
--spec start_timer(state()) -> state().
-start_timer(State = #state{timer = undefined}) ->
-    Interval = genlib_app:env(dmt_client, cache_update_interval, ?DEFAULT_INTERVAL),
-    State#state{timer = erlang:send_after(Interval, self(), timeout)}.
+-spec restart_cleanup_timer(state()) -> state().
+restart_cleanup_timer(State = #state{cleanup_timer = TimerRef}) ->
+    cancel_timer(TimerRef),
+    Interval = genlib_app:env(dmt_client, cache_cleanup_interval, ?DEFAULT_CLEANUP_INTERVAL),
+    State#state{cleanup_timer = erlang:send_after(Interval, self(), {cleanup_timer, timeout})}.
+
+cancel_timer(undefined) ->
+    ok;
+cancel_timer(TimerRef) ->
+    _ = erlang:cancel_timer(TimerRef),
+    ok.
+
+unlock_version(Version, TS) ->
+    ets:delete_object(?USERS_TABLE, #user{vsn = Version, requested_at = TS, pid = self()}).
 
 -spec cleanup() -> ok.
 cleanup() ->
     Snaps = get_all_snaps(),
     Sorted = lists:keysort(#snap.last_access, Snaps),
-    {ok, HeadVersion} = do_get_last_version(),
-    cleanup(Sorted, HeadVersion).
+    cleanup_users(Snaps),
+    case do_get_last_version() of
+        {ok, HeadVersion} -> cleanup(Sorted, HeadVersion);
+        _ -> ok
+    end.
 
--spec cleanup([snap()], dmt_client:version()) -> ok.
+cleanup_users(Snaps) ->
+    VersionMap =
+        lists:foldl(
+            fun(#snap{vsn = Version}, Acc) -> sets:add_element(Version, Acc) end,
+            sets:new(),
+            Snaps
+        ),
+
+    ets:foldl(
+        fun(Rec = #user{vsn = Version, pid = Pid, requested_at = '_'}, _) ->
+            case sets:is_element(Version, VersionMap) andalso erlang:is_process_alive(Pid) of
+                true -> ok;
+                false -> ets:delete_object(?USERS_TABLE, Rec)
+            end
+        end,
+        ok,
+        ?USERS_TABLE
+    ).
+
+-spec cleanup([snap()], dmt_client:vsn()) -> ok.
 cleanup([], _HeadVersion) ->
     ok;
 cleanup(Snaps, HeadVersion) ->
@@ -451,10 +546,15 @@ cleanup(Snaps, HeadVersion) ->
     MaxElements = genlib_map:get(elements, CacheLimits, 20),
     % 50Mb by default
     MaxMemory = genlib_map:get(memory, CacheLimits, 52428800),
+
     case Elements > MaxElements orelse (Elements > 1 andalso Memory > MaxMemory) of
         true ->
             Tail = remove_earliest(Snaps, HeadVersion),
-            cleanup(Tail, HeadVersion);
+            %% It's possible that all snaps are locked by users: try later
+            case Snaps == Tail of
+                true -> ok;
+                false -> cleanup(Tail, HeadVersion)
+            end;
         false ->
             ok
     end.
@@ -481,20 +581,35 @@ ets_memory(TID) ->
     Info = ets:info(TID),
     proplists:get_value(memory, Info).
 
--spec remove_earliest([snap()], dmt_client:version()) -> [snap()].
+-spec remove_earliest([snap()], dmt_client:vsn()) -> [snap()].
+remove_earliest([], _HeadVersion) ->
+    [];
 remove_earliest([#snap{vsn = HeadVersion} | Tail], HeadVersion) ->
     Tail;
-remove_earliest([Snap | Tail], _HeadVersion) ->
-    remove_snap(Snap),
-    Tail.
+remove_earliest([Snap = #snap{vsn = Version, cached_at = StoredAt} | Tail], HeadVersion) ->
+    MatchSpec = [
+        {
+            #user{vsn = Version, pid = '_', requested_at = '$1'},
+            [{'<', '$1', StoredAt}],
+            ['$_']
+        }
+    ],
+    case ets:select_count(?USERS_TABLE, MatchSpec) of
+        0 ->
+            remove_snap(Snap),
+            Tail;
+        _ ->
+            [Snap | remove_earliest(Tail, HeadVersion)]
+    end.
 
 -spec remove_snap(snap()) -> ok.
 remove_snap(#snap{tid = TID, vsn = Version}) ->
     true = ets:delete(?TABLE, Version),
+    _ = ets:select_delete(?USERS_TABLE, [{#user{vsn = Version, requested_at = '_', pid = '_'}, [], ['$_']}]),
     true = ets:delete(TID),
     ok.
 
--spec update_last_access(dmt_client:version()) -> boolean().
+-spec update_last_access(dmt_client:vsn()) -> boolean().
 update_last_access(Version) ->
     ets:update_element(?TABLE, Version, {#snap.last_access, timestamp()}).
 
@@ -506,47 +621,172 @@ timestamp() ->
 
 -ifdef(TEST).
 
+-include_lib("eunit/include/eunit.hrl").
+-include_lib("damsel/include/dmsl_domain_thrift.hrl").
+
 % dirty hack for warn_missing_spec
 -spec test() -> any().
 
--include_lib("eunit/include/eunit.hrl").
+-spec all_test_() -> ok.
 
--spec cleanup_test() -> ok.
-cleanup_test() ->
-    application:set_env(dmt_client, max_cache_size, #{elements => 2, memory => 52428800}),
-    ok = create_tables(),
+all_test_() ->
+    {setup,
+        fun() ->
+            create_tables(),
+            %% So that put_snapshot works correctly
+            register(?SERVER, self())
+        end,
+        [
+            fun test_cleanup/0,
+            fun test_last_access/0,
+            fun test_get_object/0,
+            fun test_get_object_by_type/0,
+            fun test_fold/0
+        ]}.
+
+set_cache_limits(Elements) ->
+    set_cache_limits(Elements, 52428800).
+
+set_cache_limits(Elements, Memory) ->
+    application:set_env(dmt_client, max_cache_size, #{elements => Elements, memory => Memory}).
+
+-spec test_cleanup() -> _.
+test_cleanup() ->
+    set_cache_limits(2),
     ok = put_snapshot(#'Snapshot'{version = 4, domain = dmt_domain:new()}),
-    ok = timer:sleep(1),
     ok = put_snapshot(#'Snapshot'{version = 3, domain = dmt_domain:new()}),
-    ok = timer:sleep(1),
     ok = put_snapshot(#'Snapshot'{version = 2, domain = dmt_domain:new()}),
-    ok = timer:sleep(1),
     ok = put_snapshot(#'Snapshot'{version = 1, domain = dmt_domain:new()}),
+    cleanup(),
     [
         #snap{vsn = 1, _ = _},
         #snap{vsn = 4, _ = _}
-    ] = get_all_snaps(),
-    ok.
+    ] = get_all_snaps().
 
--spec last_access_test() -> ok.
-last_access_test() ->
-    application:set_env(dmt_client, max_cache_size, #{elements => 3, memory => 52428800}),
-    % Tables already created in cleanup_test/0
+-spec test_last_access() -> _.
+test_last_access() ->
+    set_cache_limits(3),
+    % Tables already created in test_cleanup/0
     ok = put_snapshot(#'Snapshot'{version = 4, domain = dmt_domain:new()}),
-    ok = timer:sleep(1),
     ok = put_snapshot(#'Snapshot'{version = 3, domain = dmt_domain:new()}),
-    ok = timer:sleep(1),
     ok = put_snapshot(#'Snapshot'{version = 2, domain = dmt_domain:new()}),
-    ok = timer:sleep(1),
     Ref = {category, #'domain_CategoryRef'{id = 1}},
-    {error, object_not_found} = get_object(3, Ref),
+    {error, object_not_found} = get_object(3, Ref, undefined),
     ok = put_snapshot(#'Snapshot'{version = 1, domain = dmt_domain:new()}),
+    cleanup(),
     [
         #snap{vsn = 1, _ = _},
         #snap{vsn = 3, _ = _},
         #snap{vsn = 4, _ = _}
-    ] = get_all_snaps(),
-    ok.
+    ] = get_all_snaps().
+
+-spec test_get_object() -> _.
+test_get_object() ->
+    set_cache_limits(1),
+    Version = 5,
+    Cat = {_, Ref, _} = fixture(category),
+    Domain = dmt_insert_many(
+        [{category, Cat}]
+    ),
+
+    ok = put_snapshot(#'Snapshot'{version = Version, domain = Domain}),
+
+    {ok, {category, Cat}} = get_object(Version, {category, Ref}, undefined).
+
+-spec test_get_object_by_type() -> _.
+test_get_object_by_type() ->
+    set_cache_limits(1),
+    Version = 6,
+    Cat1 = fixture(category),
+    Cat2 = fixture(category_2),
+
+    Domain = domain_with_all_fixtures(),
+
+    ok = put_snapshot(#'Snapshot'{version = Version, domain = Domain}),
+
+    {ok, Objects} = get_objects_by_type(Version, category, undefined),
+    [Cat1, Cat2] = lists:sort(Objects).
+
+-spec test_fold() -> _.
+test_fold() ->
+    set_cache_limits(1),
+    Version = 7,
+
+    Domain = domain_with_all_fixtures(),
+
+    ok = put_snapshot(#'Snapshot'{version = Version, domain = Domain}),
+
+    {ok, OrdSet} = fold_objects(
+        Version,
+        fun
+            (
+                category,
+                #'domain_CategoryObject'{
+                    ref = #'domain_CategoryRef'{id = ID}
+                },
+                Acc
+            ) ->
+                ordsets:add_element(ID, Acc);
+            (_Type, _Obj, Acc) ->
+                Acc
+        end,
+        ordsets:new(),
+        undefined
+    ),
+
+    [1, 2] = ordsets:to_list(OrdSet).
+
+domain_with_all_fixtures() ->
+    dmt_insert_many(
+        [
+            {category, fixture(category)},
+            {category, fixture(category_2)},
+            {currency, fixture(currency)}
+        ]
+    ).
+
+dmt_insert_many(Objects) ->
+    dmt_insert_many(Objects, dmt_domain:new()).
+
+dmt_insert_many(Objects, Domain) ->
+    lists:foldl(
+        fun(Object, DomainIn) ->
+            {ok, DomainOut} = dmt_domain:insert(Object, DomainIn),
+            DomainOut
+        end,
+        Domain,
+        Objects
+    ).
+
+fixture(ID) ->
+    maps:get(
+        ID,
+        #{
+            category => #'domain_CategoryObject'{
+                ref = #'domain_CategoryRef'{id = 1},
+                data = #'domain_Category'{
+                    name = <<"cat">>,
+                    description = <<"Sample category">>
+                }
+            },
+            category_2 => #'domain_CategoryObject'{
+                ref = #'domain_CategoryRef'{id = 2},
+                data = #'domain_Category'{
+                    name = <<"dog">>,
+                    description = <<"Sample category">>
+                }
+            },
+            currency => #'domain_CurrencyObject'{
+                ref = #'domain_CurrencyRef'{symbolic_code = <<"USD">>},
+                data = #'domain_Currency'{
+                    name = <<"dog">>,
+                    symbolic_code = <<"USD">>,
+                    numeric_code = 840,
+                    exponent = 2
+                }
+            }
+        }
+    ).
 
 % TEST
 -endif.
