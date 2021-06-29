@@ -87,7 +87,7 @@
 start_link() ->
     gen_server:start_link({local, ?SERVER}, ?MODULE, [], []).
 
--spec get(dmt_client:vsn(), dmt_client:transport_opts()) ->
+-spec get(dmt_client:vsn(), dmt_client:opts()) ->
     {ok, dmt_client:snapshot()} | {error, version_not_found | woody_error()}.
 get(Version, Opts) ->
     case ensure_version(Version, Opts) of
@@ -97,7 +97,7 @@ get(Version, Opts) ->
             Error
     end.
 
--spec get_object(dmt_client:vsn(), dmt_client:object_ref(), dmt_client:transport_opts()) ->
+-spec get_object(dmt_client:vsn(), dmt_client:object_ref(), dmt_client:opts()) ->
     {ok, dmt_client:domain_object()} | {error, version_not_found | object_not_found | woody_error()}.
 get_object(Version, ObjectRef, Opts) ->
     case ensure_version(Version, Opts) of
@@ -105,7 +105,7 @@ get_object(Version, ObjectRef, Opts) ->
         {error, _} = Error -> Error
     end.
 
--spec get_objects_by_type(dmt_client:vsn(), dmt_client:object_type(), dmt_client:transport_opts()) ->
+-spec get_objects_by_type(dmt_client:vsn(), dmt_client:object_type(), dmt_client:opts()) ->
     {ok, [dmt_client:domain_object()]} | {error, version_not_found | woody_error()}.
 get_objects_by_type(Version, ObjectType, Opts) ->
     case ensure_version(Version, Opts) of
@@ -113,7 +113,7 @@ get_objects_by_type(Version, ObjectType, Opts) ->
         {error, _} = Error -> Error
     end.
 
--spec fold_objects(dmt_client:vsn(), dmt_client:object_folder(Acc), Acc, dmt_client:transport_opts()) ->
+-spec fold_objects(dmt_client:vsn(), dmt_client:object_folder(Acc), Acc, dmt_client:opts()) ->
     {ok, Acc} | {error, version_not_found | woody_error()}.
 fold_objects(Version, Folder, Acc, Opts) ->
     case ensure_version(Version, Opts) of
@@ -318,8 +318,7 @@ fetch_by_reference(Reference, From, Opts, #state{waiters = Waiters} = State) ->
     NewWaiters = maybe_fetch(Reference, From, DispatchFun, Waiters, Opts),
     State#state{waiters = NewWaiters}.
 
--spec maybe_fetch(dmt_client:ref(), from() | undefined, dispatch_fun(), waiters(), dmt_client:transport_opts()) ->
-    waiters().
+-spec maybe_fetch(dmt_client:ref(), from() | undefined, dispatch_fun(), waiters(), dmt_client:opts()) -> waiters().
 maybe_fetch(Reference, ReplyTo, DispatchFun, Waiters, Opts) ->
     Prev =
         case maps:find(Reference, Waiters) of
@@ -331,7 +330,7 @@ maybe_fetch(Reference, ReplyTo, DispatchFun, Waiters, Opts) ->
         end,
     Waiters#{Reference => [{ReplyTo, DispatchFun} | Prev]}.
 
--spec schedule_fetch(dmt_client:ref(), dmt_client:transport_opts()) -> pid().
+-spec schedule_fetch(dmt_client:ref(), dmt_client:opts()) -> pid().
 schedule_fetch(Reference, Opts) ->
     proc_lib:spawn_link(
         fun() ->
@@ -347,7 +346,7 @@ schedule_fetch(Reference, Opts) ->
         end
     ).
 
--spec fetch(dmt_client:ref(), dmt_client:transport_opts()) -> fetch_result().
+-spec fetch(dmt_client:ref(), dmt_client:opts()) -> fetch_result().
 fetch(Reference, Opts) ->
     try
         Snapshot = do_fetch(Reference, Opts),
@@ -359,7 +358,7 @@ fetch(Reference, Opts) ->
             {error, Error}
     end.
 
--spec do_fetch(dmt_client:ref(), dmt_client:transport_opts()) -> dmt_client:snapshot() | no_return().
+-spec do_fetch(dmt_client:ref(), dmt_client:opts()) -> dmt_client:snapshot() | no_return().
 do_fetch({head, #'Head'{}}, Opts) ->
     case latest_snapshot() of
         {ok, OldHead} ->
