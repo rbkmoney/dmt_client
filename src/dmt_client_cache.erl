@@ -332,7 +332,7 @@ maybe_fetch(Reference, ReplyTo, DispatchFun, Waiters, Opts) ->
 
 -spec schedule_fetch(dmt_client:ref(), dmt_client:opts()) -> pid().
 schedule_fetch(Reference, Opts) ->
-    proc_lib:spawn_link(
+    spawn_link(
         fun() ->
             Result =
                 case fetch(Reference, Opts) of
@@ -342,6 +342,7 @@ schedule_fetch(Reference, Opts) ->
                     {error, _} = Error ->
                         Error
                 end,
+
             cast({dispatch, Reference, Result})
         end
     ).
