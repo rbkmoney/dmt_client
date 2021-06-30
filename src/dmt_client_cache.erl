@@ -311,7 +311,7 @@ get_all_snaps() ->
     ets:tab2list(?TABLE).
 
 update(From, State) ->
-    restart_timer(fetch_by_reference({head, #'Head'{}}, From, undefined, State)).
+    restart_timer(fetch_by_reference({head, #'Head'{}}, From, #{}, State)).
 
 fetch_by_reference(Reference, From, Opts, #state{waiters = Waiters} = State) ->
     DispatchFun = fun dispatch_reply/2,
@@ -382,10 +382,8 @@ update_head(Head, PullLimit, Opts) ->
 -spec dispatch_reply(from() | undefined, fetch_result()) -> _.
 dispatch_reply(undefined, _Result) ->
     ok;
-dispatch_reply(From, {ok, Version}) ->
-    gen_server:reply(From, {ok, Version});
-dispatch_reply(From, Error) ->
-    gen_server:reply(From, Error).
+dispatch_reply(From, Response) ->
+    gen_server:reply(From, Response).
 
 -spec build_snapshot(snap()) -> {ok, dmt_client:snapshot()} | {error, version_not_found}.
 build_snapshot(#snap{vsn = Version, tid = TID}) ->
@@ -556,7 +554,7 @@ test_last_access() ->
     ok = put_snapshot(#'Snapshot'{version = 3, domain = dmt_domain:new()}),
     ok = put_snapshot(#'Snapshot'{version = 2, domain = dmt_domain:new()}),
     Ref = {category, #'domain_CategoryRef'{id = 1}},
-    {error, object_not_found} = get_object(3, Ref, undefined),
+    {error, object_not_found} = get_object(3, Ref, #{}),
     ok = put_snapshot(#'Snapshot'{version = 1, domain = dmt_domain:new()}),
     cleanup(),
     [
@@ -576,7 +574,7 @@ test_get_object() ->
 
     ok = put_snapshot(#'Snapshot'{version = Version, domain = Domain}),
 
-    {ok, {category, Cat}} = get_object(Version, {category, Ref}, undefined).
+    {ok, {category, Cat}} = get_object(Version, {category, Ref}, #{}).
 
 -spec test_get_object_by_type() -> _.
 test_get_object_by_type() ->
@@ -589,7 +587,7 @@ test_get_object_by_type() ->
 
     ok = put_snapshot(#'Snapshot'{version = Version, domain = Domain}),
 
-    {ok, Objects} = get_objects_by_type(Version, category, undefined),
+    {ok, Objects} = get_objects_by_type(Version, category, #{}),
     [Cat1, Cat2] = lists:sort(Objects).
 
 -spec test_fold() -> _.
@@ -616,7 +614,7 @@ test_fold() ->
                 Acc
         end,
         ordsets:new(),
-        undefined
+        #{}
     ),
 
     [1, 2] = ordsets:to_list(OrdSet).
