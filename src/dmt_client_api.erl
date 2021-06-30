@@ -33,7 +33,7 @@ call(ServiceName, Function, Args, Opts) ->
             #{recv_timeout => 60000, connect_timeout => 1000},
             maps:merge(
                 genlib_app:env(dmt_client, transport_opts, #{}),
-                maps:get(Opts, transport_opts, #{})
+                maps:get(transport_opts, Opts, #{})
             )
         ),
 
@@ -44,7 +44,7 @@ call(ServiceName, Function, Args, Opts) ->
     },
 
     Context =
-        case maps:find(Opts, woody_context) of
+        case maps:find(woody_context, Opts) of
             error -> woody_context:new();
             {ok, Ctx} -> Ctx
         end,
