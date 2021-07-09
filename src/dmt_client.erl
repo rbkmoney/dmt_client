@@ -7,6 +7,7 @@
 -behaviour(application).
 
 %% API
+-export([checkout/0]).
 -export([checkout/1]).
 -export([checkout/2]).
 -export([checkout_object/1]).
@@ -83,6 +84,10 @@
 }.
 
 %%% API
+
+-spec checkout() -> snapshot() | no_return().
+checkout() ->
+    checkout(latest).
 
 -spec checkout(version()) -> snapshot() | no_return().
 checkout(Reference) ->
