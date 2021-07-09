@@ -92,7 +92,7 @@ inserts_updates_upserts_and_removes(_C) ->
     Cat1ModifiedAgain = dmt_client:checkout_object(Cat1Ref),
     Cat2 = dmt_client:checkout_object(Cat2Ref),
 
-    Version5 = dmt_client:remove([Cat1Ref]),
+    Version5 = dmt_client:remove(Cat1ModifiedAgain),
     {ok, Version5} = dmt_client_cache:update(),
     ?assertThrow(
         #'ObjectNotFound'{},
