@@ -121,8 +121,11 @@ checkout_object(Reference, ObjectReference) ->
 
 -spec checkout_object(version(), object_ref(), opts()) -> domain_object() | no_return().
 checkout_object(Reference, ObjectReference, Opts) ->
+    unwrap(do_checkout_object(Reference, ObjectReference, Opts)).
+
+do_checkout_object(Reference, ObjectReference, Opts) ->
     Version = ref_to_version(Reference),
-    unwrap(dmt_client_cache:get_object(Version, ObjectReference, Opts)).
+    dmt_client_cache:get_object(Version, ObjectReference, Opts).
 
 -spec checkout_versioned_object(object_ref()) -> versioned_object() | no_return().
 checkout_versioned_object(ObjectReference) ->
@@ -217,15 +220,14 @@ pull_range(Reference, Limit, Opts) ->
 %% - and all of them do not let combine operations (insert X + update Ys + remove Z),
 %%   so the changes will be split via N (3 in this case) commits and won't be transactional
 
--spec insert(domain_object() | [domain_object()]) -> ok | no_return().
+-spec insert(domain_object() | [domain_object()]) -> vsn() | no_return().
 insert(ObjectOrObjects) ->
     insert(latest, ObjectOrObjects).
 
--spec insert(version(), domain_object() | [domain_object()]) -> ok | no_return().
+-spec insert(version(), domain_object() | [domain_object()]) -> vsn() | no_return().
 insert(Reference, Object) when not is_list(Object) ->
     insert(Reference, [Object]);
 insert(Reference, Objects) ->
-    Version = ref_to_version(Reference),
     Commit = #'Commit'{
         ops = [
             {insert, #'InsertOp'{
@@ -234,13 +236,13 @@ insert(Reference, Objects) ->
             || Object <- Objects
         ]
     },
-    commit(Version, Commit).
+    commit(Reference, Commit).
 
--spec update(domain_object() | [domain_object()]) -> ok | no_return().
+-spec update(domain_object() | [domain_object()]) -> vsn() | no_return().
 update(NewObjectOrObjects) ->
     update(latest, NewObjectOrObjects).
 
--spec update(version(), domain_object() | [domain_object()]) -> ok | no_return().
+-spec update(version(), domain_object() | [domain_object()]) -> vsn() | no_return().
 update(Reference, NewObject) when not is_list(NewObject) ->
     update(Reference, [NewObject]);
 update(Reference, NewObjects) ->
@@ -257,11 +259,11 @@ update(Reference, NewObjects) ->
     },
     commit(Version, Commit).
 
--spec upsert(domain_object() | [domain_object()]) -> ok | no_return().
+-spec upsert(domain_object() | [domain_object()]) -> vsn() | no_return().
 upsert(NewObjectOrObjects) ->
     upsert(latest, NewObjectOrObjects).
 
--spec upsert(version(), domain_object() | [domain_object()]) -> ok | no_return().
+-spec upsert(version(), domain_object() | [domain_object()]) -> vsn() | no_return().
 upsert(Reference, NewObject) when not is_list(NewObject) ->
     upsert(Reference, [NewObject]);
 upsert(Reference, NewObjects) ->
@@ -269,21 +271,21 @@ upsert(Reference, NewObjects) ->
     Commit = #'Commit'{
         ops = lists:foldl(
             fun(NewObject = {Tag, {ObjectName, Ref, _Data}}, Ops) ->
-                case checkout_object(Version, {Tag, Ref}) of
-                    NewObject ->
+                case unwrap_find(do_checkout_object(Reference, {Tag, Ref}, #{})) of
+                    {ok, NewObject} ->
                         Ops;
-                    notfound ->
-                        [
-                            {insert, #'InsertOp'{
-                                object = NewObject
-                            }}
-                            | Ops
-                        ];
-                    OldObject = {Tag, {ObjectName, Ref, _OldData}} ->
+                    {ok, OldObject = {Tag, {ObjectName, Ref, _OldData}}} ->
                         [
                             {update, #'UpdateOp'{
                                 old_object = OldObject,
                                 new_object = NewObject
+                            }}
+                            | Ops
+                        ];
+                    {error, object_not_found} ->
+                        [
+                            {insert, #'InsertOp'{
+                                object = NewObject
                             }}
                             | Ops
                         ]
@@ -295,15 +297,14 @@ upsert(Reference, NewObjects) ->
     },
     commit(Version, Commit).
 
--spec remove(domain_object() | [domain_object()]) -> ok | no_return().
+-spec remove(domain_object() | [domain_object()]) -> vsn() | no_return().
 remove(ObjectOrObjects) ->
     remove(latest, ObjectOrObjects).
 
--spec remove(version(), domain_object() | [domain_object()]) -> ok | no_return().
+-spec remove(version(), domain_object() | [domain_object()]) -> vsn() | no_return().
 remove(Reference, Object) when not is_list(Object) ->
     remove(Reference, [Object]);
 remove(Reference, Objects) ->
-    Version = ref_to_version(Reference),
     Commit = #'Commit'{
         ops = [
             {remove, #'RemoveOp'{
@@ -312,7 +313,7 @@ remove(Reference, Objects) ->
             || Object <- Objects
         ]
     },
-    commit(Version, Commit).
+    commit(Reference, Commit).
 
 %% Health check API
 
@@ -347,8 +348,13 @@ stop(_State) ->
 
 unwrap({ok, Acc}) -> Acc;
 unwrap({error, {woody_error, _} = Error}) -> erlang:error(Error);
-%% DISCUSS: shouldn't version_not_found be handled some other way?
-unwrap({error, _}) -> erlang:throw(#'ObjectNotFound'{}).
+unwrap({error, version_not_found = Reason}) -> erlang:error(Reason);
+unwrap({error, object_not_found}) -> erlang:throw(#'ObjectNotFound'{}).
+
+%% Pass object_not_found as is, raising only some of errors
+unwrap_find({error, {woody_error, _} = Error}) -> erlang:error(Error);
+unwrap_find({error, version_not_found = Reason}) -> erlang:error(Reason);
+unwrap_find(Other) -> Other.
 
 -spec ref_to_version(version()) -> vsn().
 ref_to_version(Version) when is_integer(Version) ->
