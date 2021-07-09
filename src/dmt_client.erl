@@ -32,6 +32,14 @@
 -export([pull_range/1]).
 -export([pull_range/2]).
 -export([pull_range/3]).
+-export([insert/1]).
+-export([insert/2]).
+-export([update/1]).
+-export([update/2]).
+-export([upsert/1]).
+-export([upsert/2]).
+-export([remove/1]).
+-export([remove/2]).
 
 %% Health check API
 -export([health_check/0]).
@@ -202,6 +210,109 @@ pull_range(Reference, Limit) ->
 pull_range(Reference, Limit, Opts) ->
     Version = ref_to_version(Reference),
     dmt_client_backend:pull_range(Version, Limit, Opts).
+
+%% Convenience Shortcuts
+%% Use carefully:
+%% - some of them have suboptimal performance (see update implementation)
+%% - and all of them do not let combine operations (insert X + update Ys + remove Z),
+%%   so the changes will be split via N (3 in this case) commits and won't be transactional
+
+-spec insert(domain_object() | [domain_object()]) -> ok | no_return().
+insert(ObjectOrObjects) ->
+    insert(latest, ObjectOrObjects).
+
+-spec insert(version(), domain_object() | [domain_object()]) -> ok | no_return().
+insert(Reference, Object) when not is_list(Object) ->
+    insert(Reference, [Object]);
+insert(Reference, Objects) ->
+    Version = ref_to_version(Reference),
+    Commit = #'Commit'{
+        ops = [
+            {insert, #'InsertOp'{
+                object = Object
+            }}
+            || Object <- Objects
+        ]
+    },
+    commit(Version, Commit).
+
+-spec update(domain_object() | [domain_object()]) -> ok | no_return().
+update(NewObjectOrObjects) ->
+    update(latest, NewObjectOrObjects).
+
+-spec update(version(), domain_object() | [domain_object()]) -> ok | no_return().
+update(Reference, NewObject) when not is_list(NewObject) ->
+    update(Reference, [NewObject]);
+update(Reference, NewObjects) ->
+    Version = ref_to_version(Reference),
+    Commit = #'Commit'{
+        ops = [
+            {update, #'UpdateOp'{
+                old_object = OldObject,
+                new_object = NewObject
+            }}
+            || NewObject = {Tag, {_ObjectName, Ref, _Data}} <- NewObjects,
+               OldObject <- [checkout_object(Version, {Tag, Ref})]
+        ]
+    },
+    commit(Version, Commit).
+
+-spec upsert(domain_object() | [domain_object()]) -> ok | no_return().
+upsert(NewObjectOrObjects) ->
+    upsert(latest, NewObjectOrObjects).
+
+-spec upsert(version(), domain_object() | [domain_object()]) -> ok | no_return().
+upsert(Reference, NewObject) when not is_list(NewObject) ->
+    upsert(Reference, [NewObject]);
+upsert(Reference, NewObjects) ->
+    Version = ref_to_version(Reference),
+    Commit = #'Commit'{
+        ops = lists:foldl(
+            fun(NewObject = {Tag, {ObjectName, Ref, _Data}}, Ops) ->
+                case checkout_object(Version, {Tag, Ref}) of
+                    NewObject ->
+                        Ops;
+                    notfound ->
+                        [
+                            {insert, #'InsertOp'{
+                                object = NewObject
+                            }}
+                            | Ops
+                        ];
+                    OldObject = {Tag, {ObjectName, Ref, _OldData}} ->
+                        [
+                            {update, #'UpdateOp'{
+                                old_object = OldObject,
+                                new_object = NewObject
+                            }}
+                            | Ops
+                        ]
+                end
+            end,
+            [],
+            NewObjects
+        )
+    },
+    commit(Version, Commit).
+
+-spec remove(domain_object() | [domain_object()]) -> ok | no_return().
+remove(ObjectOrObjects) ->
+    remove(latest, ObjectOrObjects).
+
+-spec remove(version(), domain_object() | [domain_object()]) -> ok | no_return().
+remove(Reference, Object) when not is_list(Object) ->
+    remove(Reference, [Object]);
+remove(Reference, Objects) ->
+    Version = ref_to_version(Reference),
+    Commit = #'Commit'{
+        ops = [
+            {remove, #'RemoveOp'{
+                object = Object
+            }}
+            || Object <- Objects
+        ]
+    },
+    commit(Version, Commit).
 
 %% Health check API
 
