@@ -24,9 +24,11 @@
 -export([checkout_fold_objects/2]).
 -export([checkout_fold_objects/3]).
 -export([checkout_fold_objects/4]).
+-export([commit/1]).
 -export([commit/2]).
 -export([commit/3]).
 -export([get_last_version/0]).
+-export([pull_range/1]).
 -export([pull_range/2]).
 -export([pull_range/3]).
 
@@ -183,9 +185,9 @@ commit(Reference, Commit, Opts) ->
 get_last_version() ->
     dmt_client_cache:get_last_version().
 
--spec pull_range(version(), limit()) -> history() | no_return().
-pull_range(Reference, Limit) ->
-    pull_range(Reference, Limit, #{}).
+-spec pull_range(limit()) -> history() | no_return().
+pull_range(Limit) ->
+    pull_range(latest, Limit).
 
 -spec pull_range(version(), limit()) -> history() | no_return().
 pull_range(Reference, Limit) ->
