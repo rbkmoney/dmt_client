@@ -12,6 +12,7 @@
 -export([fold_objects/4]).
 -export([get_last_version/0]).
 -export([update/0]).
+-export([async_update/0]).
 
 %% gen_server callbacks
 
@@ -139,6 +140,10 @@ get_last_version() ->
 update() ->
     call(update).
 
+-spec async_update() -> ok.
+async_update() ->
+    cast(update).
+
 %%% gen_server callbacks
 
 -spec init(_) -> {ok, state(), 0}.
@@ -166,6 +171,8 @@ handle_cast({dispatch, Reference, Result}, #state{waiters = Waiters} = State) ->
 handle_cast(cleanup, State) ->
     cleanup(),
     {noreply, State};
+handle_cast(update, State) ->
+    {noreply, update(undefined, State)};
 handle_cast(_Msg, State) ->
     {noreply, State}.
 

@@ -88,7 +88,9 @@
 -type history() :: dmsl_domain_config_thrift:'History'().
 -type opts() :: #{
     transport_opts => woody_client_thrift_http_transport:transport_options(),
-    woody_context => woody_context:ctx()
+    woody_context => woody_context:ctx(),
+    %% Function-specific opts
+    atom() => term()
 }.
 
 %%% API
@@ -195,7 +197,13 @@ commit(Reference, Commit) ->
 -spec commit(version(), commit(), opts()) -> vsn() | no_return().
 commit(Reference, Commit, Opts) ->
     Version = ref_to_version(Reference),
-    dmt_client_backend:commit(Version, Commit, Opts).
+    Result = dmt_client_backend:commit(Version, Commit, Opts),
+    case maps:get(sync, Opts, true) of
+        true -> unwrap(dmt_client_cache:update());
+        async -> dmt_client_cache:async_update();
+        false -> ok
+    end,
+    Result.
 
 -spec get_last_version() -> vsn().
 get_last_version() ->
