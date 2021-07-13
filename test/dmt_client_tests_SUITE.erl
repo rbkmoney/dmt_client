@@ -80,20 +80,16 @@ inserts_updates_upserts_and_removes(_C) ->
 
     Version1 = dmt_client:get_last_version(),
     Version2 = dmt_client:insert(Cat1),
-    {ok, Version2} = dmt_client_cache:update(),
     Cat1 = dmt_client:checkout_object(Cat1Ref),
 
     Version3 = dmt_client:update(Cat1Modified),
-    {ok, Version3} = dmt_client_cache:update(),
     #'VersionedObject'{version = Version3, object = Cat1Modified} = dmt_client:checkout_versioned_object(Cat1Ref),
 
     Version4 = dmt_client:upsert([Cat1ModifiedAgain, Cat2]),
-    {ok, Version4} = dmt_client_cache:update(),
     Cat1ModifiedAgain = dmt_client:checkout_object(Cat1Ref),
     Cat2 = dmt_client:checkout_object(Cat2Ref),
 
     Version5 = dmt_client:remove(Cat1ModifiedAgain),
-    {ok, Version5} = dmt_client_cache:update(),
     ?assertThrow(
         #'ObjectNotFound'{},
         dmt_client:checkout_object(Cat1Ref)
