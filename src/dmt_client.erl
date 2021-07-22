@@ -196,7 +196,7 @@ commit(Reference, Commit) ->
 commit(Reference, Commit, Opts) ->
     Version = ref_to_version(Reference),
     Result = dmt_client_backend:commit(Version, Commit, Opts),
-    {ok, _NewVersion} = unwrap(dmt_client_cache:update()),
+    _NewVersion = unwrap(dmt_client_cache:update()),
     Result.
 
 -spec get_last_version() -> vsn().
