@@ -193,10 +193,12 @@ commit(Reference, Commit) ->
     commit(Reference, Commit, #{}).
 
 -spec commit(version(), commit(), opts()) -> vsn() | no_return().
-commit(latest, Commit, Opts) ->
-    Version = unwrap(dmt_client_cache:update()),
-    commit(Version, Commit, Opts);
-commit(Version, Commit, Opts) ->
+commit(Reference, Commit, Opts) ->
+    Version = updating_ref_to_version(Reference),
+    do_commit(Version, Commit, Opts).
+
+%% Without Pre-commit cache update version of commit with explicit version
+do_commit(Version, Commit, Opts) ->
     Result = dmt_client_backend:commit(Version, Commit, Opts),
     _NewVersion = unwrap(dmt_client_cache:update()),
     Result.
@@ -250,7 +252,7 @@ update(NewObjectOrObjects) ->
 update(Reference, NewObject) when not is_list(NewObject) ->
     update(Reference, [NewObject]);
 update(Reference, NewObjects) ->
-    Version = ref_to_version(Reference),
+    Version = updating_ref_to_version(Reference),
     Commit = #'Commit'{
         ops = [
             {update, #'UpdateOp'{
@@ -261,7 +263,8 @@ update(Reference, NewObjects) ->
                OldObject <- [checkout_object(Version, {Tag, Ref})]
         ]
     },
-    commit(Version, Commit).
+    %% Don't need pre-commit update: done in the beginning
+    do_commit(Version, Commit, #{}).
 
 -spec upsert(domain_object() | [domain_object()]) -> vsn() | no_return().
 upsert(NewObjectOrObjects) ->
@@ -271,11 +274,11 @@ upsert(NewObjectOrObjects) ->
 upsert(Reference, NewObject) when not is_list(NewObject) ->
     upsert(Reference, [NewObject]);
 upsert(Reference, NewObjects) ->
-    Version = ref_to_version(Reference),
+    Version = updating_ref_to_version(Reference),
     Commit = #'Commit'{
         ops = lists:foldl(
             fun(NewObject = {Tag, {ObjectName, Ref, _Data}}, Ops) ->
-                case unwrap_find(do_checkout_object(Reference, {Tag, Ref}, #{})) of
+                case unwrap_find(do_checkout_object(Version, {Tag, Ref}, #{})) of
                     {ok, NewObject} ->
                         Ops;
                     {ok, OldObject = {Tag, {ObjectName, Ref, _OldData}}} ->
@@ -299,7 +302,8 @@ upsert(Reference, NewObjects) ->
             NewObjects
         )
     },
-    commit(Version, Commit).
+    %% Don't need pre-commit update: done in the beginning
+    do_commit(Version, Commit, #{}).
 
 -spec remove(domain_object() | [domain_object()]) -> vsn() | no_return().
 remove(ObjectOrObjects) ->
@@ -359,6 +363,12 @@ unwrap({error, object_not_found}) -> erlang:throw(#'ObjectNotFound'{}).
 unwrap_find({error, {woody_error, _} = Error}) -> erlang:error(Error);
 unwrap_find({error, version_not_found = Reason}) -> erlang:error(Reason);
 unwrap_find(Other) -> Other.
+
+-spec updating_ref_to_version(version()) -> vsn().
+updating_ref_to_version(latest) ->
+    unwrap(dmt_client_cache:update());
+updating_ref_to_version(Ref) ->
+    ref_to_version(Ref).
 
 -spec ref_to_version(version()) -> vsn().
 ref_to_version(Version) when is_integer(Version) ->
