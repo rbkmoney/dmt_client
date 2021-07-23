@@ -34,12 +34,16 @@
 -export([pull_range/3]).
 -export([insert/1]).
 -export([insert/2]).
+-export([insert/3]).
 -export([update/1]).
 -export([update/2]).
+-export([update/3]).
 -export([upsert/1]).
 -export([upsert/2]).
+-export([upsert/3]).
 -export([remove/1]).
 -export([remove/2]).
+-export([remove/3]).
 
 %% Health check API
 -export([health_check/0]).
@@ -234,6 +238,10 @@ insert(ObjectOrObjects) ->
 insert(Reference, Object) when not is_list(Object) ->
     insert(Reference, [Object]);
 insert(Reference, Objects) ->
+    insert(Reference, Objects, #{}).
+
+-spec insert(version(), domain_object() | [domain_object()], opts()) -> vsn() | no_return().
+insert(Reference, Objects, Opts) ->
     Commit = #'Commit'{
         ops = [
             {insert, #'InsertOp'{
@@ -242,7 +250,7 @@ insert(Reference, Objects) ->
             || Object <- Objects
         ]
     },
-    commit(Reference, Commit).
+    commit(Reference, Commit, Opts).
 
 -spec update(domain_object() | [domain_object()]) -> vsn() | no_return().
 update(NewObjectOrObjects) ->
@@ -252,6 +260,10 @@ update(NewObjectOrObjects) ->
 update(Reference, NewObject) when not is_list(NewObject) ->
     update(Reference, [NewObject]);
 update(Reference, NewObjects) ->
+    update(Reference, NewObjects, #{}).
+
+-spec update(version(), domain_object() | [domain_object()], opts()) -> vsn() | no_return().
+update(Reference, NewObjects, Opts) ->
     Version = updating_ref_to_version(Reference),
     Commit = #'Commit'{
         ops = [
@@ -260,11 +272,11 @@ update(Reference, NewObjects) ->
                 new_object = NewObject
             }}
             || NewObject = {Tag, {_ObjectName, Ref, _Data}} <- NewObjects,
-               OldObject <- [checkout_object(Version, {Tag, Ref})]
+               OldObject <- [checkout_object(Version, {Tag, Ref}, Opts)]
         ]
     },
     %% Don't need pre-commit update: done in the beginning
-    do_commit(Version, Commit, #{}).
+    do_commit(Version, Commit, Opts).
 
 -spec upsert(domain_object() | [domain_object()]) -> vsn() | no_return().
 upsert(NewObjectOrObjects) ->
@@ -274,11 +286,15 @@ upsert(NewObjectOrObjects) ->
 upsert(Reference, NewObject) when not is_list(NewObject) ->
     upsert(Reference, [NewObject]);
 upsert(Reference, NewObjects) ->
+    upsert(Reference, NewObjects, #{}).
+
+-spec upsert(version(), domain_object() | [domain_object()], opts()) -> vsn() | no_return().
+upsert(Reference, NewObjects, Opts) ->
     Version = updating_ref_to_version(Reference),
     Commit = #'Commit'{
         ops = lists:foldl(
             fun(NewObject = {Tag, {ObjectName, Ref, _Data}}, Ops) ->
-                case unwrap_find(do_checkout_object(Version, {Tag, Ref}, #{})) of
+                case unwrap_find(do_checkout_object(Version, {Tag, Ref}, Opts)) of
                     {ok, NewObject} ->
                         Ops;
                     {ok, OldObject = {Tag, {ObjectName, Ref, _OldData}}} ->
@@ -303,7 +319,7 @@ upsert(Reference, NewObjects) ->
         )
     },
     %% Don't need pre-commit update: done in the beginning
-    do_commit(Version, Commit, #{}).
+    do_commit(Version, Commit, Opts).
 
 -spec remove(domain_object() | [domain_object()]) -> vsn() | no_return().
 remove(ObjectOrObjects) ->
@@ -313,6 +329,10 @@ remove(ObjectOrObjects) ->
 remove(Reference, Object) when not is_list(Object) ->
     remove(Reference, [Object]);
 remove(Reference, Objects) ->
+    remove(Reference, Objects, #{}).
+
+-spec remove(version(), domain_object() | [domain_object()], opts()) -> vsn() | no_return().
+remove(Reference, Objects, Opts) ->
     Commit = #'Commit'{
         ops = [
             {remove, #'RemoveOp'{
@@ -321,7 +341,7 @@ remove(Reference, Objects) ->
             || Object <- Objects
         ]
     },
-    commit(Reference, Commit).
+    commit(Reference, Commit, Opts).
 
 %% Health check API
 
