@@ -69,7 +69,9 @@
 -type woody_error() :: {woody_error, woody_error:system_error()}.
 
 -type from() :: {pid(), term()}.
--type fetch_result() :: {ok, dmt_client:snapshot()} | {error, version_not_found | woody_error()}.
+-type fetch_result() ::
+    {ok, dmt_client:snapshot()} | {error, version_not_found | woody_error() | {already_fetched, dmt_client:vsn()}}.
+
 -type dispatch_fun() :: fun((from(), fetch_result()) -> any()).
 -type waiters() :: #{
     dmt_client:ref() => [{from() | undefined, dispatch_fun()}]
