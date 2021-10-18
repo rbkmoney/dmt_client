@@ -481,9 +481,9 @@ cleanup([], _HeadVersion) ->
 cleanup(Snaps, HeadVersion) ->
     {Elements, Memory} = get_cache_size(),
     CacheLimits = genlib_app:env(dmt_client, max_cache_size, #{}),
-    MaxElements = genlib_map:get(elements, CacheLimits, 20),
+    MaxElements = max(0, genlib_map:get(elements, CacheLimits, 20)),
     % 50Mb by default
-    MaxMemory = genlib_map:get(memory, CacheLimits, 52428800),
+    MaxMemory = max(0, genlib_map:get(memory, CacheLimits, 52428800)),
     case Elements > MaxElements orelse (Elements > 1 andalso Memory > MaxMemory) of
         true ->
             Tail = remove_earliest(Snaps, HeadVersion),
