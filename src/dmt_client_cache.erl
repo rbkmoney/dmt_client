@@ -135,7 +135,7 @@ get_last_version(Opts) ->
         Opts,
         genlib_app:env(dmt_client, use_upstream_latest, true)
     ),
-    Result = do_get_last_version(),
+    Result = last_version_in_cache(),
     case {Result, UseUpstream} of
         {{ok, Version}, false} ->
             Version;
@@ -396,7 +396,7 @@ fetch(Reference, Opts) ->
     | {error, already_fetched}
     | no_return().
 do_fetch({head, #'Head'{}}, Opts) ->
-    case do_get_last_version() of
+    case last_version_in_cache() of
         {ok, OldVersion} ->
             case new_commits_exist(OldVersion, Opts) of
                 true ->
@@ -453,8 +453,8 @@ build_snapshot(#snap{vsn = Version, tid = TID}) ->
             {error, version_not_found}
     end.
 
--spec do_get_last_version() -> {ok, dmt_client:vsn()} | {error, version_not_found}.
-do_get_last_version() ->
+-spec last_version_in_cache() -> {ok, dmt_client:vsn()} | {error, version_not_found}.
+last_version_in_cache() ->
     case ets:last(?TABLE) of
         '$end_of_table' ->
             {error, version_not_found};
@@ -478,7 +478,7 @@ start_timer(State = #state{timer = undefined}) ->
 cleanup() ->
     Snaps = get_all_snaps(),
     Sorted = lists:keysort(#snap.last_access, Snaps),
-    {ok, HeadVersion} = do_get_last_version(),
+    {ok, HeadVersion} = last_version_in_cache(),
     cleanup(Sorted, HeadVersion).
 
 -spec cleanup([snap()], dmt_client:vsn()) -> ok.
