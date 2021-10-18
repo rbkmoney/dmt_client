@@ -130,7 +130,11 @@ get_last_version() ->
 
 -spec get_last_version(dmt_client:opts()) -> dmt_client:vsn() | no_return().
 get_last_version(Opts) ->
-    UseUpstream = maps:get(use_upstream_latest, Opts, true),
+    UseUpstream = maps:get(
+        use_upstream_latest,
+        Opts,
+        genlib_app:env(dmt_client, use_upstream_latest, true)
+    ),
     Result = do_get_last_version(),
     case {Result, UseUpstream} of
         {{ok, Version}, false} ->
