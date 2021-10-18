@@ -11,6 +11,7 @@
 -export([get_objects_by_type/3]).
 -export([fold_objects/4]).
 -export([get_last_version/0]).
+-export([get_last_version/1]).
 -export([update/0]).
 
 %% gen_server callbacks
@@ -123,21 +124,32 @@ fold_objects(Version, Folder, Acc, Opts) ->
 
 -spec get_last_version() -> dmt_client:vsn() | no_return().
 get_last_version() ->
-    case do_get_last_version() of
-        {ok, Version} ->
+    get_last_version(#{}).
+
+-spec get_last_version(dmt_client:opts()) -> dmt_client:vsn() | no_return().
+get_last_version(Opts) ->
+    UseUpstream = maps:get(use_upstream_latest, Opts, true),
+    Result = do_get_last_version(),
+    case {Result, UseUpstream} of
+        {{ok, Version}, false} ->
             Version;
-        {error, version_not_found} ->
-            case update() of
-                {ok, Version} ->
-                    Version;
-                {error, Error} ->
-                    erlang:error(Error)
-            end
+        {{error, version_not_found}, _} ->
+            try_update();
+        {_, true} ->
+            try_update()
     end.
 
 -spec update() -> {ok, dmt_client:vsn()} | {error, woody_error()}.
 update() ->
     call(update).
+
+try_update() ->
+    case update() of
+        {ok, Version} ->
+            Version;
+        {error, Error} ->
+            erlang:error(Error)
+    end.
 
 %%% gen_server callbacks
 
@@ -352,6 +364,8 @@ schedule_fetch(Reference, Opts) ->
                     {ok, Snapshot} ->
                         put_snapshot(Snapshot),
                         {ok, Snapshot#'Snapshot'.version};
+                    {error, {already_fetched, Version}} ->
+                        {ok, Version};
                     {error, _} = Error ->
                         Error
                 end,
@@ -363,8 +377,7 @@ schedule_fetch(Reference, Opts) ->
 -spec fetch(dmt_client:ref(), dmt_client:opts()) -> fetch_result().
 fetch(Reference, Opts) ->
     try
-        Snapshot = do_fetch(Reference, Opts),
-        {ok, Snapshot}
+        do_fetch(Reference, Opts)
     catch
         throw:#'VersionNotFound'{} ->
             {error, version_not_found};
@@ -372,25 +385,42 @@ fetch(Reference, Opts) ->
             {error, Error}
     end.
 
--spec do_fetch(dmt_client:ref(), dmt_client:opts()) -> dmt_client:snapshot() | no_return().
+-spec do_fetch(dmt_client:ref(), dmt_client:opts()) ->
+    {ok, dmt_client:snapshot()}
+    | {error, already_fetched}
+    | no_return().
 do_fetch({head, #'Head'{}}, Opts) ->
-    case latest_snapshot() of
-        {ok, OldHead} ->
-            Limit = genlib_app:env(dmt_client, cache_update_pull_limit, ?DEFAULT_LIMIT),
-            update_head(OldHead, Limit, Opts);
+    case do_get_last_version() of
+        {ok, OldVersion} ->
+            case new_commits_exist(OldVersion, Opts) of
+                true ->
+                    {ok, Head} = do_get(OldVersion),
+                    Limit = genlib_app:env(dmt_client, cache_update_pull_limit, ?DEFAULT_LIMIT),
+                    {ok, update_head(Head, Limit, Opts)};
+                %% Cached version doesn't fall behind upstream
+                false ->
+                    {error, {already_fetched, OldVersion}}
+            end;
         {error, version_not_found} ->
-            dmt_client_backend:checkout({head, #'Head'{}}, Opts)
+            {ok, dmt_client_backend:checkout({head, #'Head'{}}, Opts)}
     end;
 do_fetch(Reference, Opts) ->
-    dmt_client_backend:checkout(Reference, Opts).
+    {ok, dmt_client_backend:checkout(Reference, Opts)}.
+
+new_commits_exist(OldVersion, Opts) ->
+    History = dmt_client_backend:pull_range(OldVersion, _PullLimit = 1, Opts),
+    map_size(History) > 0.
 
 update_head(Head, PullLimit, Opts) ->
     FreshHistory = dmt_client_backend:pull_range(Head#'Snapshot'.version, PullLimit, Opts),
     {ok, NewHead} = dmt_history:head(FreshHistory, Head),
+
     %% Received history is smaller then PullLimit => reached the top of changes
     case map_size(FreshHistory) < PullLimit of
-        true -> NewHead;
-        false -> update_head(NewHead, PullLimit, Opts)
+        true ->
+            NewHead;
+        false ->
+            update_head(NewHead, PullLimit, Opts)
     end.
 
 -spec dispatch_reply(from() | undefined, fetch_result()) -> _.
@@ -415,15 +445,6 @@ build_snapshot(#snap{vsn = Version, tid = TID}) ->
         % table was deleted due to cleanup process or crash
         error:badarg ->
             {error, version_not_found}
-    end.
-
--spec latest_snapshot() -> {ok, dmt_client:snapshot()} | {error, version_not_found}.
-latest_snapshot() ->
-    case do_get_last_version() of
-        {ok, Version} ->
-            do_get(Version);
-        {error, version_not_found} = Error ->
-            Error
     end.
 
 -spec do_get_last_version() -> {ok, dmt_client:vsn()} | {error, version_not_found}.

@@ -29,6 +29,7 @@
 -export([commit/2]).
 -export([commit/3]).
 -export([get_last_version/0]).
+-export([get_last_version/1]).
 -export([pull_range/1]).
 -export([pull_range/2]).
 -export([pull_range/3]).
@@ -92,7 +93,8 @@
 -type history() :: dmsl_domain_config_thrift:'History'().
 -type opts() :: #{
     transport_opts => woody_client_thrift_http_transport:transport_options(),
-    woody_context => woody_context:ctx()
+    woody_context => woody_context:ctx(),
+    use_upstream_latest => boolean()
 }.
 
 %%% API
@@ -107,7 +109,7 @@ checkout(Reference) ->
 
 -spec checkout(version(), opts()) -> snapshot() | no_return().
 checkout(Reference, Opts) ->
-    Version = ref_to_version(Reference),
+    Version = ref_to_version(Reference, Opts),
     case dmt_client_cache:get(Version, Opts) of
         {ok, Snapshot} ->
             Snapshot;
@@ -128,7 +130,7 @@ checkout_object(Reference, ObjectReference, Opts) ->
     unwrap(do_checkout_object(Reference, ObjectReference, Opts)).
 
 do_checkout_object(Reference, ObjectReference, Opts) ->
-    Version = ref_to_version(Reference),
+    Version = ref_to_version(Reference, Opts),
     dmt_client_cache:get_object(Version, ObjectReference, Opts).
 
 -spec checkout_versioned_object(object_ref()) -> versioned_object() | no_return().
@@ -141,7 +143,7 @@ checkout_versioned_object(Reference, ObjectReference) ->
 
 -spec checkout_versioned_object(version(), object_ref(), opts()) -> versioned_object() | no_return().
 checkout_versioned_object(Reference, ObjectReference, Opts) ->
-    Version = ref_to_version(Reference),
+    Version = ref_to_version(Reference, Opts),
     #'VersionedObject'{version = Version, object = checkout_object(Reference, ObjectReference, Opts)}.
 
 -spec checkout_objects_by_type(object_type()) -> [untagged_domain_object()] | no_return().
@@ -154,7 +156,7 @@ checkout_objects_by_type(Reference, ObjectType) ->
 
 -spec checkout_objects_by_type(version(), object_type(), opts()) -> [untagged_domain_object()] | no_return().
 checkout_objects_by_type(Reference, ObjectType, Opts) ->
-    Version = ref_to_version(Reference),
+    Version = ref_to_version(Reference, Opts),
     unwrap(dmt_client_cache:get_objects_by_type(Version, ObjectType, Opts)).
 
 -spec checkout_filter_objects(object_filter()) -> [{object_type(), domain_object()}] | no_return().
@@ -185,7 +187,7 @@ checkout_fold_objects(Reference, Folder, Acc) ->
 
 -spec checkout_fold_objects(version(), object_folder(Acc), Acc, opts()) -> Acc | no_return().
 checkout_fold_objects(Reference, Folder, Acc, Opts) ->
-    Version = ref_to_version(Reference),
+    Version = ref_to_version(Reference, Opts),
     unwrap(dmt_client_cache:fold_objects(Version, Folder, Acc, Opts)).
 
 -spec commit(commit()) -> vsn() | no_return().
@@ -209,7 +211,11 @@ do_commit(Version, Commit, Opts) ->
 
 -spec get_last_version() -> vsn().
 get_last_version() ->
-    dmt_client_cache:get_last_version().
+    get_last_version(#{}).
+
+-spec get_last_version(opts()) -> vsn().
+get_last_version(Opts) ->
+    dmt_client_cache:get_last_version(Opts).
 
 -spec pull_range(limit()) -> history() | no_return().
 pull_range(Limit) ->
@@ -221,7 +227,7 @@ pull_range(Reference, Limit) ->
 
 -spec pull_range(version(), limit(), opts()) -> history() | no_return().
 pull_range(Reference, Limit, Opts) ->
-    Version = ref_to_version(Reference),
+    Version = ref_to_version(Reference, Opts),
     dmt_client_backend:pull_range(Version, Limit, Opts).
 
 %% Convenience Shortcuts
@@ -388,10 +394,10 @@ unwrap_find(Other) -> Other.
 updating_ref_to_version(latest) ->
     unwrap(dmt_client_cache:update());
 updating_ref_to_version(Ref) ->
-    ref_to_version(Ref).
+    ref_to_version(Ref, #{}).
 
--spec ref_to_version(version()) -> vsn().
-ref_to_version(Version) when is_integer(Version) ->
+-spec ref_to_version(version(), opts()) -> vsn().
+ref_to_version(Version, _Opts) when is_integer(Version) ->
     Version;
-ref_to_version(latest) ->
-    dmt_client_cache:get_last_version().
+ref_to_version(latest, Opts) ->
+    get_last_version(Opts).
