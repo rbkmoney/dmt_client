@@ -393,7 +393,7 @@ fetch(Reference, Opts) ->
 
 -spec do_fetch(dmt_client:ref(), dmt_client:opts()) ->
     {ok, dmt_client:snapshot()}
-    | {error, already_fetched}
+    | {error, {already_fetched, dmt_client:vsn()}}
     | no_return().
 do_fetch({head, #'Head'{}}, Opts) ->
     case last_version_in_cache() of
