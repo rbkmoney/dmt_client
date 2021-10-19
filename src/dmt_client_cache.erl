@@ -29,6 +29,7 @@
 -define(DEFAULT_LIMIT, 10).
 -define(DEFAULT_CALL_TIMEOUT, 10000).
 -define(DEFAULT_MAX_ELEMENTS, 20).
+%% 50Mb by default
 -define(DEFAULT_MAX_MEMORY, 52428800).
 
 -include_lib("damsel/include/dmsl_domain_config_thrift.hrl").
@@ -81,8 +82,14 @@
 
 -record(state, {
     timer = undefined :: undefined | reference(),
-    waiters = #{} :: waiters()
+    waiters = #{} :: waiters(),
+    config = #{} :: cache_config()
 }).
+
+-type cache_config() :: #{
+    max_snapshots => non_neg_integer(),
+    max_memory => non_neg_integer()
+}.
 
 -type state() :: #state{}.
 
@@ -164,7 +171,8 @@ try_update() ->
 -spec init(_) -> {ok, state(), 0}.
 init(_) ->
     ok = create_tables(),
-    {ok, #state{}, 0}.
+    State = #state{config = build_config()},
+    {ok, State, 0}.
 
 -spec handle_call(term(), {pid(), term()}, state()) -> {reply, term(), state()}.
 handle_call({fetch_version, Version, Opts}, From, State) ->
@@ -184,7 +192,7 @@ handle_cast({dispatch, Reference, Result}, #state{waiters = Waiters} = State) ->
     _ = [DispatchFun(From, Result) || {From, DispatchFun} <- maps:get(Reference, Waiters, [])],
     {noreply, State#state{waiters = maps:remove(Reference, Waiters)}};
 handle_cast(cleanup, State) ->
-    cleanup(),
+    cleanup(State),
     {noreply, State};
 handle_cast(_Msg, State) ->
     {noreply, State}.
@@ -209,6 +217,17 @@ code_change(_OldVsn, State, _Extra) ->
 create_tables() ->
     ?TABLE = ets:new(?TABLE, ?meta_table_opts),
     ok.
+
+build_config() ->
+    CacheLimits = genlib_app:env(dmt_client, max_cache_size, #{}),
+    MaxElements = genlib_map:get(elements, CacheLimits, ?DEFAULT_MAX_ELEMENTS),
+    true = 0 =< MaxElements,
+    MaxMemory = genlib_map:get(memory, CacheLimits, ?DEFAULT_MAX_MEMORY),
+    true = 0 =< MaxMemory,
+    #{
+        max_memory => MaxMemory,
+        max_snapshots => MaxElements
+    }.
 
 -spec call(term()) -> term().
 call(Msg) ->
@@ -476,51 +495,45 @@ start_timer(State = #state{timer = undefined}) ->
     Interval = genlib_app:env(dmt_client, cache_update_interval, ?DEFAULT_INTERVAL),
     State#state{timer = erlang:send_after(Interval, self(), timeout)}.
 
--spec cleanup() -> ok.
-cleanup() ->
+-spec cleanup(state()) -> ok.
+cleanup(#state{config = Config}) ->
     Snaps = get_all_snaps(),
     Sorted = lists:keysort(#snap.last_access, Snaps),
     {ok, HeadVersion} = last_version_in_cache(),
-    cleanup(Sorted, HeadVersion).
+    cleanup(Sorted, Config, HeadVersion).
 
--spec cleanup([snap()], dmt_client:vsn()) -> ok.
-cleanup([], _HeadVersion) ->
+-spec cleanup([snap()], cache_config(), dmt_client:vsn()) -> ok.
+cleanup([], _Config, _HeadVersion) ->
     ok;
-cleanup(Snaps, HeadVersion) ->
-    {Elements, Memory} = get_cache_size(),
-    CacheLimits = genlib_app:env(dmt_client, max_cache_size, #{}),
-    MaxElements = max(0, genlib_map:get(elements, CacheLimits, ?DEFAULT_MAX_ELEMENTS)),
-    % 50Mb by default
-    MaxMemory = max(0, genlib_map:get(memory, CacheLimits, ?DEFAULT_MAX_MEMORY)),
-    case Elements > MaxElements orelse (Elements > 1 andalso Memory > MaxMemory) of
+cleanup(Snaps, Config, HeadVersion) ->
+    SnapshotCount = get_snapshot_count(),
+    MemoryUsage = get_snapshot_memory_usage(),
+    MaxSnapshots = maps:get(max_snapshots, Config),
+    MaxMemory = maps:get(max_memory, Config),
+    case SnapshotCount > MaxSnapshots orelse (SnapshotCount > 1 andalso MemoryUsage > MaxMemory) of
         true ->
             Tail = remove_earliest(Snaps, HeadVersion),
-            cleanup(Tail, HeadVersion);
+            cleanup(Tail, Config, HeadVersion);
         false ->
             ok
     end.
 
--spec get_cache_size() -> {non_neg_integer(), non_neg_integer()}.
-get_cache_size() ->
+-spec get_snapshot_count() -> {non_neg_integer(), non_neg_integer()}.
+get_snapshot_count() ->
+    ets:info(?TABLE, size).
+
+-spec get_snapshot_memory_usage() -> non_neg_integer().
+get_snapshot_memory_usage() ->
     WordSize = erlang:system_info(wordsize),
-    Info = ets:info(?TABLE),
-    Words = get_snapshot_tables_size(),
-    {proplists:get_value(size, Info), WordSize * Words}.
-
--spec get_snapshot_tables_size() -> non_neg_integer().
-get_snapshot_tables_size() ->
-    ets:foldl(
-        fun(#snap{tid = TID}, Words) ->
-            Words + ets_memory(TID)
-        end,
-        0,
-        ?TABLE
-    ).
-
--spec ets_memory(ets:tid()) -> non_neg_integer().
-ets_memory(TID) ->
-    Info = ets:info(TID),
-    proplists:get_value(memory, Info).
+    WordCount =
+        ets:foldl(
+            fun(#snap{tid = TID}, Words) ->
+                Words + ets:info(TID, memory)
+            end,
+            0,
+            ?TABLE
+        ),
+    WordSize * WordCount.
 
 -spec remove_earliest([snap()], dmt_client:vsn()) -> [snap()].
 remove_earliest([#snap{vsn = HeadVersion} | Tail], HeadVersion) ->
