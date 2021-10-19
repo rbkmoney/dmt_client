@@ -518,7 +518,7 @@ cleanup(Snaps, Config, HeadVersion) ->
             ok
     end.
 
--spec get_snapshot_count() -> {non_neg_integer(), non_neg_integer()}.
+-spec get_snapshot_count() -> non_neg_integer().
 get_snapshot_count() ->
     ets:info(?TABLE, size).
 
