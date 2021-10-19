@@ -588,6 +588,9 @@ set_cache_limits(Elements) ->
 set_cache_limits(Elements, Memory) ->
     application:set_env(dmt_client, max_cache_size, #{elements => Elements, memory => Memory}).
 
+cleanup() ->
+    cleanup(#state{config = build_config()}).
+
 -spec test_cleanup() -> _.
 test_cleanup() ->
     set_cache_limits(2),
