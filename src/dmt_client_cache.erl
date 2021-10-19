@@ -28,6 +28,8 @@
 -define(DEFAULT_INTERVAL, 5000).
 -define(DEFAULT_LIMIT, 10).
 -define(DEFAULT_CALL_TIMEOUT, 10000).
+-define(DEFAULT_MAX_ELEMENTS, 20).
+-define(DEFAULT_MAX_MEMORY, 52428800).
 
 -include_lib("damsel/include/dmsl_domain_config_thrift.hrl").
 -include_lib("stdlib/include/ms_transform.hrl").
@@ -487,9 +489,9 @@ cleanup([], _HeadVersion) ->
 cleanup(Snaps, HeadVersion) ->
     {Elements, Memory} = get_cache_size(),
     CacheLimits = genlib_app:env(dmt_client, max_cache_size, #{}),
-    MaxElements = max(0, genlib_map:get(elements, CacheLimits, 20)),
+    MaxElements = max(0, genlib_map:get(elements, CacheLimits, ?DEFAULT_MAX_ELEMENTS)),
     % 50Mb by default
-    MaxMemory = max(0, genlib_map:get(memory, CacheLimits, 52428800)),
+    MaxMemory = max(0, genlib_map:get(memory, CacheLimits, ?DEFAULT_MAX_MEMORY)),
     case Elements > MaxElements orelse (Elements > 1 andalso Memory > MaxMemory) of
         true ->
             Tail = remove_earliest(Snaps, HeadVersion),
