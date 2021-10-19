@@ -140,9 +140,9 @@ get_last_version() ->
 -spec get_last_version(dmt_client:opts()) -> dmt_client:vsn() | no_return().
 get_last_version(Opts) ->
     UseUpstream = maps:get(
-        use_upstream_latest,
+        use_cached_latest,
         Opts,
-        genlib_app:env(dmt_client, use_upstream_latest, true)
+        genlib_app:env(dmt_client, use_cached_latest, false)
     ),
     Result = last_version_in_cache(),
     case {Result, UseUpstream} of

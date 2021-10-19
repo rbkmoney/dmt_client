@@ -94,7 +94,7 @@
 -type opts() :: #{
     transport_opts => woody_client_thrift_http_transport:transport_options(),
     woody_context => woody_context:ctx(),
-    use_upstream_latest => boolean()
+    use_cached_latest => boolean()
 }.
 
 %%% API

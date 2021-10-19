@@ -9,7 +9,7 @@
 -export([end_per_suite/1]).
 -export([insert_and_all_checkouts/1]).
 -export([inserts_updates_upserts_and_removes/1]).
--export([upstream_latest/1]).
+-export([cached_latest/1]).
 
 -include_lib("damsel/include/dmsl_domain_config_thrift.hrl").
 
@@ -28,7 +28,7 @@ groups() ->
         {all, [sequence], [
             insert_and_all_checkouts,
             inserts_updates_upserts_and_removes,
-            upstream_latest
+            cached_latest
         ]}
     ].
 
@@ -108,13 +108,13 @@ inserts_updates_upserts_and_removes(_C) ->
 
     ?assertEqual(Versions, ordsets:from_list(Versions)).
 
--spec upstream_latest(term()) -> _.
-upstream_latest(_C) ->
+-spec cached_latest(term()) -> _.
+cached_latest(_C) ->
     Object = dmt_client_fixtures:fixture_domain_object(100, <<"UpstreamLatest">>),
     Commit = #'Commit'{ops = [{insert, #'InsertOp'{object = Object}}]},
 
     %% Get around library to prevent cache update
     Version = dmt_client:get_last_version(),
     NewVersion = dmt_client_backend:commit(Version, Commit, #{}),
-    Version = dmt_client:get_last_version(#{use_upstream_latest => false}),
-    NewVersion = dmt_client:get_last_version(#{use_upstream_latest => true}).
+    Version = dmt_client:get_last_version(#{use_cached_latest => true}),
+    NewVersion = dmt_client:get_last_version(#{use_cached_latest => false}).
