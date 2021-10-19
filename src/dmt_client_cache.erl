@@ -95,7 +95,7 @@ start_link() ->
 get(Version, Opts) ->
     case ensure_version(Version, Opts) of
         {ok, Version} ->
-            do_get(Version);
+            get_cached_snapshot(Version);
         {error, _} = Error ->
             Error
     end.
@@ -232,8 +232,8 @@ ensure_version(Version, Opts) ->
         false -> call({fetch_version, Version, Opts})
     end.
 
--spec do_get(dmt_client:vsn()) -> {ok, dmt_client:snapshot()} | {error, version_not_found}.
-do_get(Version) ->
+-spec get_cached_snapshot(dmt_client:vsn()) -> {ok, dmt_client:snapshot()} | {error, version_not_found}.
+get_cached_snapshot(Version) ->
     case fetch_snap(Version) of
         {ok, Snap} ->
             build_snapshot(Snap);
@@ -400,7 +400,7 @@ do_fetch({head, #'Head'{}}, Opts) ->
         {ok, OldVersion} ->
             case new_commits_exist(OldVersion, Opts) of
                 true ->
-                    {ok, Head} = do_get(OldVersion),
+                    {ok, Head} = get_cached_snapshot(OldVersion),
                     Limit = genlib_app:env(dmt_client, cache_update_pull_limit, ?DEFAULT_LIMIT),
                     {ok, update_head(Head, Limit, Opts)};
                 %% Cached version doesn't fall behind upstream
