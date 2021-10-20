@@ -150,7 +150,7 @@ get_last_version(Opts) ->
             Version;
         {{error, version_not_found}, _} ->
             try_update();
-        {_, true} ->
+        {_, false} ->
             try_update()
     end.
 
