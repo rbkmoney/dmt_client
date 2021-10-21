@@ -139,7 +139,11 @@ get_last_version() ->
 
 -spec get_last_version(dmt_client:opts()) -> dmt_client:vsn() | no_return().
 get_last_version(Opts) ->
-    UseCached = maps:get(use_cached_latest, Opts, false),
+    UseCached = maps:get(
+        use_cached_latest,
+        Opts,
+        genlib_app:env(dmt_client, use_cached_latest, false)
+    ),
     Result = last_version_in_cache(),
     case {Result, UseCached} of
         {{ok, Version}, true} ->
