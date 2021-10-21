@@ -116,7 +116,7 @@ cached_latest(_C) ->
     %% Get around library to prevent cache update
     Version = dmt_client:get_last_version(),
     NewVersion = dmt_client_backend:commit(Version, Commit, #{}),
-    application:set_env(dmt_client, use_cached_latest, true),
+    application:set_env(dmt_client, use_cached_last_version, true),
     Version = dmt_client:get_last_version(),
-    application:set_env(dmt_client, use_cached_latest, false),
+    application:set_env(dmt_client, use_cached_last_version, false),
     NewVersion = dmt_client:get_last_version().

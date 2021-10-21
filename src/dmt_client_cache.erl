@@ -134,7 +134,7 @@ fold_objects(Version, Folder, Acc, Opts) ->
 
 -spec get_last_version() -> dmt_client:vsn() | no_return().
 get_last_version() ->
-    UseCached = genlib_app:env(dmt_client, use_cached_latest, false),
+    UseCached = genlib_app:env(dmt_client, use_cached_last_version, false),
     Result = last_version_in_cache(),
     case {Result, UseCached} of
         {{ok, Version}, true} ->
