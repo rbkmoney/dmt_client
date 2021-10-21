@@ -11,7 +11,6 @@
 -export([get_objects_by_type/3]).
 -export([fold_objects/4]).
 -export([get_last_version/0]).
--export([get_last_version/1]).
 -export([update/0]).
 
 %% gen_server callbacks
@@ -135,15 +134,7 @@ fold_objects(Version, Folder, Acc, Opts) ->
 
 -spec get_last_version() -> dmt_client:vsn() | no_return().
 get_last_version() ->
-    get_last_version(#{}).
-
--spec get_last_version(dmt_client:opts()) -> dmt_client:vsn() | no_return().
-get_last_version(Opts) ->
-    UseCached = maps:get(
-        use_cached_latest,
-        Opts,
-        genlib_app:env(dmt_client, use_cached_latest, false)
-    ),
+    UseCached = genlib_app:env(dmt_client, use_cached_latest, false),
     Result = last_version_in_cache(),
     case {Result, UseCached} of
         {{ok, Version}, true} ->
